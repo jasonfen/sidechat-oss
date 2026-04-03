@@ -102,7 +102,7 @@ done
 
 mkdir -p "$SCRIPT_DIR" "$SCRIPT_DIR/hooks"
 echo "Downloading shell scripts to $SCRIPT_DIR/..."
-for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh; do
+for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py; do
   curl -fsSL "$SIDECHAT_URL/install/$script" -o "$SCRIPT_DIR/$script"
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"
@@ -239,7 +239,7 @@ Example: \"Starting auth module — implementing POST /login in src/auth.ts\"
 ### Monitoring
 
 **At session start:** Read \`.sidechat/crons.md\` and follow the startup tasks:
-run \`/start\`, register webhook if needed, start webhook listener.
+run \`/start\`, register webhook if needed, verify webhook listener service.
 The FileChanged hook on \`.sidechat/new-mentions.txt\` triggers \`/mention-check\` automatically.
 
 **Mention handling (via \`/mention-check\`):**
@@ -300,12 +300,11 @@ with the server. This enables instant mention delivery — the server POSTs
 directly to this bot instead of relying on polling. Only needs to run once
 per server URL change or secret rotation.
 
-## 3. Start webhook listener
+## 3. Verify webhook listener
 
-Run `.sidechat/sc-webhook-listener.sh` to start the HTTP server that
-receives webhook POSTs and writes to `new-mentions.txt`. This replaces
-the polling daemons (sc-notify.sh, sc-mention-watcher.sh) for mention
-detection.
+The webhook listener runs as a systemd service (`sidechat-webhook.service`)
+and auto-starts on boot. Check with `systemctl status sidechat-webhook.service`.
+If not running, start with `sudo systemctl start sidechat-webhook.service`.
 CRONSEOF
 echo "  $SCRIPT_DIR/crons.md"
 
@@ -387,6 +386,54 @@ if [[ -f "$SETTINGS_FILE" ]]; then
 else
   echo "$HOOKS_JSON" | jq . > "$SETTINGS_FILE"
   echo "  $SETTINGS_FILE created with hooks and permissions"
+fi
+
+# --- Systemd service for webhook listener ---
+
+WEBHOOK_SERVICE="/etc/systemd/system/sidechat-webhook.service"
+WEBHOOK_SERVER_PATH="$(pwd)/$SCRIPT_DIR/sc-webhook-server.py"
+
+if command -v systemctl &>/dev/null; then
+  SERVICE_CONTENT="[Unit]
+Description=SideChat Webhook Listener
+After=network.target
+
+[Service]
+Type=simple
+User=$(whoami)
+WorkingDirectory=$(pwd)
+ExecStart=/usr/bin/python3 $WEBHOOK_SERVER_PATH
+Restart=on-failure
+RestartSec=10
+Environment=HOME=$HOME
+
+[Install]
+WantedBy=multi-user.target"
+
+  NEED_INSTALL=false
+  if [[ ! -f "$WEBHOOK_SERVICE" ]]; then
+    NEED_INSTALL=true
+  elif ! diff -q <(echo "$SERVICE_CONTENT") "$WEBHOOK_SERVICE" &>/dev/null; then
+    NEED_INSTALL=true
+  fi
+
+  if [[ "$NEED_INSTALL" == "true" ]]; then
+    if [[ "$(id -u)" == "0" ]] || sudo -n true 2>/dev/null; then
+      echo "$SERVICE_CONTENT" | sudo tee "$WEBHOOK_SERVICE" > /dev/null
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now sidechat-webhook.service
+      echo "  sidechat-webhook.service installed and started"
+    else
+      echo "  NOTE: webhook systemd service requires sudo to install."
+      echo "  Run manually:"
+      echo "    sudo tee $WEBHOOK_SERVICE << 'EOF'"
+      echo "$SERVICE_CONTENT"
+      echo "EOF"
+      echo "    sudo systemctl daemon-reload && sudo systemctl enable --now sidechat-webhook.service"
+    fi
+  else
+    echo "  sidechat-webhook.service already up to date"
+  fi
 fi
 
 # --- Done ---
