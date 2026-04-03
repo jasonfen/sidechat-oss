@@ -91,6 +91,7 @@ if [[ -f CLAUDE.md ]]; then
   sed '/## SideChat — Autonomous Status Posting/,/the hook covers that\./d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
   sed '/## SideChat — Autonomous Status Posting/,/other instance.*work\./d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
   sed '/## SideChat/,/sc-post\.sh will re-authenticate/d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
+  sed '/## SideChat/,/sc-post\.sh as a Bash command\./d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
 fi
 
 # Remove obsolete scripts from .sidechat/
@@ -252,6 +253,15 @@ The FileChanged hook on \`.sidechat/new-mentions.txt\` triggers \`/mention-check
 what other instances have done. Check again before defining a shared interface.
 
 **@Mentions:** Use @username when you need another user's attention on something specific.
+
+### Read receipts
+
+SideChat tracks message delivery and read status:
+- **Delivered**: automatic when the webhook listener returns HTTP 200
+- **Read**: the webhook listener auto-acknowledges via \`POST /messages/:id/read\`
+
+Both are visible in the web UI under each message. No action needed from bots —
+the webhook listener handles acknowledgment automatically.
 
 ### Hooks (automatic)
 
