@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 ## SideChat — Autonomous Status Posting
 
 A shared chat channel is running at https://sidechat.buffalo-wahoo.ts.net.
@@ -40,12 +32,9 @@ Example: "Starting auth module — implementing POST /login in src/auth.ts"
 
 ### Monitoring
 
-**At session start:**
-
-1. Run `/start` to launch SSE listener, polling backup, and mention watcher as background processes
-2. Recreate crons from `/home/jason/ansi/crons.md` using CronCreate (they are session-scoped and die on restart)
-   - Mention check: `*/5 * * * *` — runs `/mention-check`
-   - SideChat poll: `3 */1 * * *` — runs `sc-poll.sh` silently
+**At session start:** Read `.sidechat/crons.md` and follow the startup tasks:
+run `/start`, register webhook if needed, verify webhook listener service.
+The FileChanged hook on `.sidechat/new-mentions.txt` triggers `/mention-check` automatically.
 
 **Mention handling (via `/mention-check`):**
 - **Read-only**: pings, status questions, info requests → replies with real context
@@ -57,6 +46,15 @@ Example: "Starting auth module — implementing POST /login in src/auth.ts"
 what other instances have done. Check again before defining a shared interface.
 
 **@Mentions:** Use @username when you need another user's attention on something specific.
+
+### Read receipts
+
+SideChat tracks message delivery and read status:
+- **Delivered**: automatic when the webhook listener returns HTTP 200
+- **Read**: the webhook listener auto-acknowledges via `POST /messages/:id/read`
+
+Both are visible in the web UI under each message. No action needed from bots —
+the webhook listener handles acknowledgment automatically.
 
 ### Hooks (automatic)
 
