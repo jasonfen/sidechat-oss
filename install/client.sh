@@ -403,6 +403,19 @@ fi
 WEBHOOK_SERVICE="/etc/systemd/system/sidechat-webhook.service"
 WEBHOOK_SERVER_PATH="$(pwd)/$SCRIPT_DIR/sc-webhook-server.py"
 
+# Kill any old manually-launched webhook listener holding the port
+if [[ -f "$SCRIPT_DIR/.webhook-listener.pid" ]]; then
+  OLD_PID=$(cat "$SCRIPT_DIR/.webhook-listener.pid")
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    kill "$OLD_PID" 2>/dev/null
+    echo "  killed old webhook listener (PID $OLD_PID)"
+  fi
+  rm -f "$SCRIPT_DIR/.webhook-listener.pid"
+fi
+if command -v fuser &>/dev/null; then
+  fuser -k 7777/tcp 2>/dev/null && echo "  killed process on port 7777" || true
+fi
+
 if command -v systemctl &>/dev/null; then
   SERVICE_CONTENT="[Unit]
 Description=SideChat Webhook Listener
