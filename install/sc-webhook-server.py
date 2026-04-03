@@ -3,7 +3,7 @@
 Writes mentions to new-mentions.txt, triggering the FileChanged hook.
 Injects /mention-check into the tmux claude session.
 """
-import http.server, json, hashlib, hmac, os, subprocess, sys
+import http.server, json, hashlib, hmac, os, subprocess, sys, urllib.request, threading
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -22,6 +22,21 @@ if os.path.exists(config_path):
 
 BOT_NAME = config.get('BOT_NAME', 'unknown')
 SECRET = config.get('WEBHOOK_SECRET', '')
+SERVER_URL = config.get('SERVER_URL', '')
+TOKEN = config.get('TOKEN', '')
+
+
+def ack_read(msg_id):
+    """Send read receipt back to server in background."""
+    if not SERVER_URL or not TOKEN:
+        return
+    try:
+        url = f'{SERVER_URL}/messages/{msg_id}/read'
+        req = urllib.request.Request(url, method='POST', data=b'',
+                                     headers={'Authorization': f'Bearer {TOKEN}'})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -50,6 +65,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             mentions_path = os.path.join(PROJECT_DIR, '.sidechat', 'new-mentions.txt')
             with open(mentions_path, 'a') as f:
                 f.write(line)
+
+            # Acknowledge read receipt in background
+            msg_id = msg.get('id')
+            if msg_id is not None:
+                threading.Thread(target=ack_read, args=(msg_id,), daemon=True).start()
 
             try:
                 subprocess.run(

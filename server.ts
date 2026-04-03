@@ -213,6 +213,8 @@ interface Message {
 
 let messages: Message[] = [];
 let messageCounter = 0;
+const readReceipts = new Map<number, Set<string>>();
+const deliveryReceipts = new Map<number, Set<string>>();
 
 function parseMentions(content: string): string[] {
   const botNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name);
@@ -253,16 +255,22 @@ async function deliverWebhooks(msg: Message) {
       headers,
       body: payload,
       signal: AbortSignal.timeout(5000),
+    }).then((res) => {
+      if (res.ok) {
+        if (!deliveryReceipts.has(msg.id)) deliveryReceipts.set(msg.id, new Set());
+        deliveryReceipts.get(msg.id)!.add(client.name);
+        broadcastEvent("delivered", { id: msg.id, bot: client.name });
+      }
     }).catch(() => {});
   }
 }
 
 // --- SSE Client Management ---
 
-const sseClients = new Set<(message: Message) => void>();
+const sseClients = new Set<(event: string, data: any) => void>();
 
-function broadcast(message: Message) {
-  sseClients.forEach((send) => send(message));
+function broadcastEvent(event: string, data: any) {
+  sseClients.forEach((send) => send(event, data));
 }
 
 // --- Archive & Snapshot ---
@@ -275,7 +283,12 @@ let lastArchivedId = 0;
 async function writeSnapshot() {
   if (messages.length === 0) return;
   try {
-    await Bun.write(SNAPSHOT_PATH, JSON.stringify({ messages, messageCounter }));
+    await Bun.write(SNAPSHOT_PATH, JSON.stringify({
+      messages,
+      messageCounter,
+      readReceipts: [...readReceipts].map(([k, v]) => [k, [...v]]),
+      deliveryReceipts: [...deliveryReceipts].map(([k, v]) => [k, [...v]]),
+    }));
   } catch (err) {
     console.error(`Snapshot failed: ${err}`);
   }
@@ -331,6 +344,12 @@ try {
     messages = data.messages ?? [];
     messageCounter = data.messageCounter ?? messages.length;
     lastArchivedId = messageCounter;
+    if (data.readReceipts) {
+      for (const [k, v] of data.readReceipts) readReceipts.set(k, new Set(v));
+    }
+    if (data.deliveryReceipts) {
+      for (const [k, v] of data.deliveryReceipts) deliveryReceipts.set(k, new Set(v));
+    }
     console.log(`Rehydrated ${messages.length} messages from snapshot`);
   }
 } catch (err) {
@@ -472,6 +491,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     color: #58a6ff;
     font-weight: 600;
   }
+  .msg-receipts {
+    color: #484f58;
+    font-size: 0.75em;
+    margin-top: 2px;
+    padding-left: 2px;
+  }
   .date-divider {
     display: flex;
     align-items: center;
@@ -596,6 +621,19 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   var msgSend = document.getElementById('msg-send');
   var autocompleteEl = document.getElementById('autocomplete');
   var seen = new Set();
+  var msgReceipts = {};
+
+  function updateReceipts(id, type, name) {
+    if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [] };
+    var list = type === 'read' ? msgReceipts[id].readBy : msgReceipts[id].deliveredTo;
+    if (list.indexOf(name) === -1) list.push(name);
+    var el = document.getElementById('receipts-' + id);
+    if (!el) return;
+    var parts = [];
+    if (msgReceipts[id].deliveredTo.length) parts.push('Delivered to ' + msgReceipts[id].deliveredTo.join(', '));
+    if (msgReceipts[id].readBy.length) parts.push('Read by ' + msgReceipts[id].readBy.join(', '));
+    el.textContent = parts.join(' \\u00b7 ');
+  }
   var userScrolled = false;
   var currentUser = SC_USER;
   var canPost = SC_CAN_POST;
@@ -692,11 +730,21 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     }
     var div = document.createElement('div');
     div.className = 'msg';
+    div.setAttribute('data-msg-id', msg.id);
     var time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     var color = getSenderColor(msg.sender);
+    var receiptsText = '';
+    if (msg.deliveredTo || msg.readBy) {
+      msgReceipts[msg.id] = { readBy: msg.readBy || [], deliveredTo: msg.deliveredTo || [] };
+      var parts = [];
+      if (msg.deliveredTo && msg.deliveredTo.length) parts.push('Delivered to ' + msg.deliveredTo.join(', '));
+      if (msg.readBy && msg.readBy.length) parts.push('Read by ' + msg.readBy.join(', '));
+      receiptsText = parts.join(' \\u00b7 ');
+    }
     div.innerHTML =
       '<div class="msg-header"><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
-      '<div class="msg-content">' + formatContent(msg.content) + '</div>';
+      '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
+      '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
     messagesEl.appendChild(div);
     if (!userScrolled) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -846,6 +894,20 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
         var msg = JSON.parse(e.data);
         renderMessage(msg);
         notifyMention(msg);
+      } catch(err) {}
+    });
+
+    es.addEventListener('delivered', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        updateReceipts(data.id, 'delivered', data.bot);
+      } catch(err) {}
+    });
+
+    es.addEventListener('read', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        updateReceipts(data.id, 'read', data.reader);
       } catch(err) {}
     });
 
@@ -2082,10 +2144,27 @@ app.post("/message", requirePostSession, async (c) => {
   };
 
   messages.push(msg);
-  broadcast(msg);
+  broadcastEvent("message", msg);
   deliverWebhooks(msg);
 
   return c.json({ id: msg.id, timestamp: msg.timestamp }, 201);
+});
+
+// POST /messages/:id/read — mark message as read
+app.post("/messages/:id/read", requirePostSession, (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
+  if (!messages.some(m => m.id === id)) {
+    return c.json({ error: "Message not found" }, 404);
+  }
+  const reader = c.get("sender") as string;
+  if (!readReceipts.has(id)) readReceipts.set(id, new Set());
+  const wasNew = !readReceipts.get(id)!.has(reader);
+  readReceipts.get(id)!.add(reader);
+  if (wasNew) {
+    broadcastEvent("read", { id, reader });
+  }
+  return c.json({ status: "ok" }, 200);
 });
 
 // --- Webhook Registration (client self-service) ---
@@ -2120,6 +2199,14 @@ app.delete("/webhook", requirePostSession, (c) => {
   return c.json({ cleared: true }, 200);
 });
 
+function withReceipts(msgs: Message[]) {
+  return msgs.map(m => ({
+    ...m,
+    readBy: [...(readReceipts.get(m.id) ?? [])],
+    deliveredTo: [...(deliveryReceipts.get(m.id) ?? [])],
+  }));
+}
+
 // GET /messages — session or observer auth required
 app.get("/messages", requireSessionOrObserver, (c) => {
   const since = c.req.query("since");
@@ -2132,12 +2219,12 @@ app.get("/messages", requireSessionOrObserver, (c) => {
     result = messages.slice(-50);
   }
 
-  return c.json({ messages: result, count: result.length });
+  return c.json({ messages: withReceipts(result), count: result.length });
 });
 
 // GET /messages/all — session or observer auth required
 app.get("/messages/all", requireSessionOrObserver, (c) => {
-  return c.json({ messages, count: messages.length });
+  return c.json({ messages: withReceipts(messages), count: messages.length });
 });
 
 // GET /events — SSE, session or observer auth required
@@ -2155,9 +2242,9 @@ app.get("/events", requireSessionOrObserver, (c) => {
       controller.write(`event: connected\ndata: ${JSON.stringify({ messageCount: messages.length, username, canPost: userCanPost })}\n\n`);
       controller.flush();
 
-      const send = (msg: Message) => {
+      const send = (event: string, data: any) => {
         try {
-          controller.write(`event: message\ndata: ${JSON.stringify(msg)}\n\n`);
+          controller.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
           controller.flush();
         } catch {}
       };
