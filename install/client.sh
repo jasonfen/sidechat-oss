@@ -265,6 +265,8 @@ Do not manually post push/commit status or call sc-post.sh as a Bash command."
 if grep -q "## SideChat" CLAUDE.md 2>/dev/null; then
   # Remove existing SideChat block and replace with updated version
   sed '/^## SideChat/,/^Do not manually post/d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
+  # Strip trailing blank lines left behind
+  sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
 fi
 printf '\n%s\n' "$CLAUDE_BLOCK" >> CLAUDE.md
 echo "  SideChat entry added to CLAUDE.md"
