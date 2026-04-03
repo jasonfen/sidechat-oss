@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Hook: post sidechat status after git push
+# Triggered by Claude Code PostToolUse on Bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SC_POST="$SCRIPT_DIR/../sc-post.sh"
+
+# Read hook input from stdin
+INPUT=$(cat)
+
+# Extract the command that was run
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+
+# Only act on git push commands
+if ! echo "$COMMAND" | grep -qE '^\s*git\s+push'; then
+  exit 0
+fi
+
+# Get the latest commit info
+HASH=$(git log -1 --format='%h' 2>/dev/null || echo "")
+MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+
+if [[ -z "$HASH" || -z "$MSG" ]]; then
+  exit 0
+fi
+
+"$SC_POST" "Pushed $HASH — $MSG" >/dev/null 2>&1 &
+
+exit 0
