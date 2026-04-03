@@ -647,7 +647,6 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 
   document.addEventListener('visibilitychange', function() {
     documentVisible = !document.hidden;
-    if (documentVisible) clearMentionBadge();
   });
 
   function addUnreadMention(msg) {
@@ -655,6 +654,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     var mentions = msg.mentions || [];
     if (mentions.indexOf(currentUser) === -1) return;
     unreadMentions.push(msg);
+    lastMentionId = msg.id;
     mentionBell.style.display = '';
     bellBadge.style.display = '';
     bellBadge.textContent = unreadMentions.length;
@@ -666,10 +666,14 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     bellBadge.textContent = '';
   }
 
+  var lastMentionId = null;
+
   if (mentionBell) {
     mentionBell.addEventListener('click', function() {
-      var lastMention = document.querySelector('[data-msg-id="' + unreadMentions[unreadMentions.length - 1].id + '"]');
-      if (lastMention) lastMention.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (lastMentionId) {
+        var el = document.querySelector('[data-msg-id="' + lastMentionId + '"]');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
       clearMentionBadge();
     });
   }
