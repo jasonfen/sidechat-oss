@@ -594,6 +594,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     <div id="header">
       <h1>SideChat</h1>
       <div id="status"><span class="dot disconnected" id="dot"></span><span id="status-text">Connecting...</span></div>
+      <div id="mention-bell" title="Unread mentions" style="display:none;cursor:pointer;position:relative;margin-left:12px;font-size:18px;">
+        <span id="bell-icon">&#x1F514;</span>
+        <span id="bell-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#f85149;color:#fff;border-radius:50%;font-size:11px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;font-weight:700;"></span>
+      </div>
     </div>
     <div id="messages"></div>
     <div id="input-bar">
@@ -636,6 +640,39 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   }
   var userScrolled = false;
   var currentUser = SC_USER;
+  var mentionBell = document.getElementById('mention-bell');
+  var bellBadge = document.getElementById('bell-badge');
+  var unreadMentions = [];
+  var documentVisible = true;
+
+  document.addEventListener('visibilitychange', function() {
+    documentVisible = !document.hidden;
+    if (documentVisible) clearMentionBadge();
+  });
+
+  function addUnreadMention(msg) {
+    if (msg.sender === currentUser) return;
+    var mentions = msg.mentions || [];
+    if (mentions.indexOf(currentUser) === -1) return;
+    unreadMentions.push(msg);
+    mentionBell.style.display = '';
+    bellBadge.style.display = '';
+    bellBadge.textContent = unreadMentions.length;
+  }
+
+  function clearMentionBadge() {
+    unreadMentions = [];
+    bellBadge.style.display = 'none';
+    bellBadge.textContent = '';
+  }
+
+  if (mentionBell) {
+    mentionBell.addEventListener('click', function() {
+      var lastMention = document.querySelector('[data-msg-id="' + unreadMentions[unreadMentions.length - 1].id + '"]');
+      if (lastMention) lastMention.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      clearMentionBadge();
+    });
+  }
   var canPost = SC_CAN_POST;
   var allUsers = [];
 
@@ -699,6 +736,25 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     return WEEKDAYS[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
   }
 
+  // Auto-mark messages as read when visible (skips initial load)
+  var readSent = new Set();
+  var initialLoadDone = false;
+  var readObserver = new IntersectionObserver(function(entries) {
+    if (!initialLoadDone) return;
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        var id = entry.target.getAttribute('data-msg-id');
+        if (id && !readSent.has(id)) {
+          readSent.add(id);
+          fetch('/messages/' + id + '/read', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + SC_TOKEN }
+          }).catch(function() {});
+        }
+      }
+    });
+  }, { threshold: 0.5 });
+
   function renderMessage(msg) {
     if (seen.has(msg.id)) return;
     seen.add(msg.id);
@@ -746,6 +802,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
     messagesEl.appendChild(div);
+    readObserver.observe(div);
+    if (!documentVisible || userScrolled) addUnreadMention(msg);
     if (!userScrolled) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
@@ -777,7 +835,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   // Load history
   fetch('/messages/all', { credentials: 'same-origin' })
     .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function(data) { data.messages.forEach(renderMessage); })
+    .then(function(data) { data.messages.forEach(renderMessage); initialLoadDone = true; })
     .catch(function(err) { messagesEl.innerHTML = '<div style="color:#f85149;">Failed to load messages: ' + err.message + '</div>'; });
 
   // Autocomplete logic
