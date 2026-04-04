@@ -73,6 +73,10 @@ db.exec(`
     message_id  INTEGER,
     uploaded_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // --- Schema migrations ---
@@ -92,11 +96,33 @@ const ADMIN_SESSION_TTL_HOURS = parseInt(Bun.env.ADMIN_SESSION_TTL_HOURS ?? "8",
 // --- File Transfer Config ---
 
 const FILES_DIR = Bun.env.FILES_DIR ?? "/var/sidechat/files";
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
-const MAX_TOTAL_STORAGE = parseInt(Bun.env.MAX_TOTAL_STORAGE ?? String(500 * 1024 * 1024), 10); // 500 MB
 const ORPHAN_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 try { mkdirSync(FILES_DIR, { recursive: true }); } catch {}
+
+// Defaults — overridable via admin settings
+const FILE_DEFAULTS = {
+  max_file_size: 50 * 1024 * 1024,       // 50 MB per file
+  max_user_storage: 500 * 1024 * 1024,    // 500 MB per user
+  max_total_storage: 5 * 1024 * 1024 * 1024, // 5 GB global
+};
+
+function getSetting(key: string, fallback: number): number {
+  const row = db.query("SELECT value FROM settings WHERE key = ?").get(key) as any;
+  return row ? parseInt(row.value, 10) : fallback;
+}
+
+function setSetting(key: string, value: number) {
+  db.run("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?", [key, String(value), String(value)]);
+}
+
+function getFileSettings() {
+  return {
+    max_file_size: getSetting("max_file_size", FILE_DEFAULTS.max_file_size),
+    max_user_storage: getSetting("max_user_storage", FILE_DEFAULTS.max_user_storage),
+    max_total_storage: getSetting("max_total_storage", FILE_DEFAULTS.max_total_storage),
+  };
+}
 
 // --- Cleanup Loop (every 5 minutes) ---
 
@@ -123,6 +149,11 @@ function runCleanup() {
 
 function getTotalFileStorage(): number {
   const row = db.query("SELECT COALESCE(SUM(size), 0) as total FROM files").get() as { total: number };
+  return row.total;
+}
+
+function getUserFileStorage(uploader: string): number {
+  const row = db.query("SELECT COALESCE(SUM(size), 0) as total FROM files WHERE uploader = ?").get(uploader) as { total: number };
   return row.total;
 }
 runCleanup(); // run once at startup
@@ -2043,6 +2074,16 @@ app.get("/admin", requireAdmin, (c) => {
     </div>
     <div id="obs-body"></div>
   </div>
+  <div class="section" id="sec-files">
+    <h2>File Storage</h2>
+    <div id="file-stats" class="empty">Loading...</div>
+    <div class="create-form" id="file-settings-form">
+      <div class="field"><label>Max File Size (MB)</label><input id="fs-max-file" type="number" min="1" style="width:100px" /></div>
+      <div class="field"><label>Per-User Quota (MB)</label><input id="fs-max-user" type="number" min="1" style="width:100px" /></div>
+      <div class="field"><label>Global Quota (MB)</label><input id="fs-max-total" type="number" min="1" style="width:100px" /></div>
+      <button class="btn-create" id="fs-save-btn">Save</button>
+    </div>
+  </div>
   <div class="section" id="sec-install">
     <h2>Client Install</h2>
     <div id="install-body" class="empty">Loading...</div>
@@ -2142,6 +2183,23 @@ app.get("/admin", requireAdmin, (c) => {
     el.innerHTML = html;
   }
 
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(1) + ' GB';
+  }
+
+  function renderFileStorage(fs) {
+    var s = fs.settings;
+    var pct = s.max_total_storage > 0 ? ((fs.used / s.max_total_storage) * 100).toFixed(1) : 0;
+    document.getElementById('file-stats').innerHTML =
+      '<div style="margin-bottom:12px">' + fmtBytes(fs.used) + ' used / ' + fmtBytes(s.max_total_storage) + ' global (' + pct + '%) — ' + fs.fileCount + ' file(s)</div>';
+    document.getElementById('fs-max-file').value = Math.round(s.max_file_size / 1048576);
+    document.getElementById('fs-max-user').value = Math.round(s.max_user_storage / 1048576);
+    document.getElementById('fs-max-total').value = Math.round(s.max_total_storage / 1048576);
+  }
+
   function refresh() {
     fetch('/admin/data', { credentials: 'same-origin' })
       .then(function(r) {
@@ -2155,6 +2213,7 @@ app.get("/admin", requireAdmin, (c) => {
         renderActive(data.clients.active);
         renderObservers(data.observers);
         renderInstall(data.installURLs || []);
+        if (data.fileStorage) renderFileStorage(data.fileStorage);
       })
       .catch(function(e) { toast(e.message, 'error'); });
   }
@@ -2182,6 +2241,22 @@ app.get("/admin", requireAdmin, (c) => {
       document.getElementById('obs-confirm').value = '';
       refresh();
     })
+    .catch(function(e) { toast(e.message, 'error'); });
+  });
+
+  document.getElementById('fs-save-btn').addEventListener('click', function() {
+    var maxFile = parseInt(document.getElementById('fs-max-file').value) * 1048576;
+    var maxUser = parseInt(document.getElementById('fs-max-user').value) * 1048576;
+    var maxTotal = parseInt(document.getElementById('fs-max-total').value) * 1048576;
+    if (!maxFile || !maxUser || !maxTotal) { toast('All values must be positive numbers', 'error'); return; }
+    fetch('/admin/settings/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ max_file_size: maxFile, max_user_storage: maxUser, max_total_storage: maxTotal })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { toast('File settings saved'); refresh(); })
     .catch(function(e) { toast(e.message, 'error'); });
   });
 
@@ -2280,6 +2355,7 @@ app.get("/admin/data", requireAdmin, async (c) => {
 
   const fileStorageUsed = getTotalFileStorage();
   const fileCount = (db.query("SELECT COUNT(*) as count FROM files").get() as any).count;
+  const fileLimits = getFileSettings();
 
   return c.json({
     clients: { pending, active, revoked },
@@ -2287,8 +2363,8 @@ app.get("/admin/data", requireAdmin, async (c) => {
     installURLs,
     fileStorage: {
       used: fileStorageUsed,
-      limit: MAX_TOTAL_STORAGE,
       fileCount,
+      settings: fileLimits,
     },
   });
 });
@@ -2370,6 +2446,25 @@ app.post("/admin/observers/:id/revoke", requireAdmin, async (c) => {
   return c.json({ status: "revoked" });
 });
 
+// POST /admin/settings/files — update file transfer limits
+app.post("/admin/settings/files", requireAdmin, async (c) => {
+  const body = await c.req.json<{ max_file_size?: number; max_user_storage?: number; max_total_storage?: number }>();
+  const updated: string[] = [];
+  if (body.max_file_size != null && body.max_file_size > 0) {
+    setSetting("max_file_size", body.max_file_size);
+    updated.push("max_file_size");
+  }
+  if (body.max_user_storage != null && body.max_user_storage > 0) {
+    setSetting("max_user_storage", body.max_user_storage);
+    updated.push("max_user_storage");
+  }
+  if (body.max_total_storage != null && body.max_total_storage > 0) {
+    setSetting("max_total_storage", body.max_total_storage);
+    updated.push("max_total_storage");
+  }
+  return c.json({ updated, settings: getFileSettings() });
+});
+
 // GET /users — session or observer auth required
 app.get("/users", requireSessionOrObserver, (c) => {
   const botNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name);
@@ -2389,13 +2484,19 @@ app.post("/files/upload", requirePostSession, async (c) => {
     return c.json({ error: "Missing file field" }, 400);
   }
 
-  if (file.size > MAX_FILE_SIZE) {
-    return c.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)` }, 413);
+  const limits = getFileSettings();
+  if (file.size > limits.max_file_size) {
+    return c.json({ error: `File too large (max ${limits.max_file_size / 1024 / 1024}MB)` }, 413);
   }
 
-  const currentUsage = getTotalFileStorage();
-  if (currentUsage + file.size > MAX_TOTAL_STORAGE) {
-    return c.json({ error: "Storage quota exceeded" }, 507);
+  const userUsage = getUserFileStorage(sender);
+  if (userUsage + file.size > limits.max_user_storage) {
+    return c.json({ error: `User storage quota exceeded (${Math.round(limits.max_user_storage / 1024 / 1024)}MB per user)` }, 507);
+  }
+
+  const totalUsage = getTotalFileStorage();
+  if (totalUsage + file.size > limits.max_total_storage) {
+    return c.json({ error: "Global storage quota exceeded" }, 507);
   }
 
   const id = crypto.randomUUID();
@@ -2416,8 +2517,15 @@ app.post("/files/upload", requirePostSession, async (c) => {
 
 // GET /files/storage — get current storage usage (any authenticated user)
 app.get("/files/storage", requireSessionOrObserver, (c) => {
-  const used = getTotalFileStorage();
-  return c.json({ used, limit: MAX_TOTAL_STORAGE, available: MAX_TOTAL_STORAGE - used });
+  const sender = c.get("sender") as string || c.get("client")?.name || c.get("observer")?.username || "unknown";
+  const limits = getFileSettings();
+  const totalUsed = getTotalFileStorage();
+  const userUsed = getUserFileStorage(sender);
+  return c.json({
+    user: { used: userUsed, limit: limits.max_user_storage },
+    global: { used: totalUsed, limit: limits.max_total_storage },
+    max_file_size: limits.max_file_size,
+  });
 });
 
 // GET /files/:id/download — download a file
