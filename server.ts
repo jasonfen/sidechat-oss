@@ -480,9 +480,17 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    transition: width 0.15s, min-width 0.15s;
   }
+  #sidebar.collapsed {
+    width: 36px;
+    min-width: 36px;
+  }
+  #sidebar.collapsed #date-list,
+  #sidebar.collapsed #sidebar-label { display: none; }
   #sidebar-header {
-    padding: 12px 14px;
+    padding: 0 14px;
+    height: 45px;
     font-size: 11px;
     font-weight: 600;
     color: #484f58;
@@ -490,7 +498,24 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     letter-spacing: 0.8px;
     border-bottom: 1px solid #21262d;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
+  #sidebar.collapsed #sidebar-header {
+    padding: 0;
+    justify-content: center;
+  }
+  #sidebar-toggle {
+    background: none;
+    border: none;
+    color: #484f58;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 4px;
+    line-height: 1;
+  }
+  #sidebar-toggle:hover { color: #c9d1d9; }
   #date-list {
     flex: 1;
     overflow-y: auto;
@@ -522,7 +547,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     height: 100vh;
   }
   #header {
-    padding: 12px 16px;
+    padding: 0 16px;
+    height: 45px;
     border-bottom: 1px solid #21262d;
     display: flex;
     justify-content: space-between;
@@ -733,7 +759,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 <body>
 <div id="app" style="display:flex;flex-direction:row;height:100vh;">
   <div id="sidebar">
-    <div id="sidebar-header">Dates</div>
+    <div id="sidebar-header">
+      <span id="sidebar-label">Dates</span>
+      <button id="sidebar-toggle" title="Toggle sidebar">&laquo;</button>
+    </div>
     <div id="date-list"></div>
   </div>
   <div id="main">
@@ -1221,6 +1250,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   }
 
   connectSSE();
+
+  var sidebar = document.getElementById('sidebar');
+  var sidebarToggle = document.getElementById('sidebar-toggle');
+  sidebarToggle.addEventListener('click', function() {
+    sidebar.classList.toggle('collapsed');
+    sidebarToggle.innerHTML = sidebar.classList.contains('collapsed') ? '&raquo;' : '&laquo;';
+  });
 
   document.getElementById('signout-btn').addEventListener('click', function() {
     fetch('/watch/logout', { method: 'POST', credentials: 'same-origin' })
