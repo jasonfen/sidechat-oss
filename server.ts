@@ -58,7 +58,8 @@ db.exec(`
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     token       TEXT NOT NULL UNIQUE,
     observer_id INTEGER NOT NULL REFERENCES observers(id),
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT
   );
 `);
 
@@ -82,7 +83,7 @@ function runCleanup() {
   db.run("DELETE FROM nonces WHERE expires_at < ? OR used = 1", [now]);
   db.run("DELETE FROM sessions WHERE expires_at < ?", [now]);
   db.run("DELETE FROM admin_sessions WHERE expires_at < ?", [now]);
-  // NOTE: observer_sessions are NOT cleaned up on a timer — only on logout or admin revoke
+  db.run("DELETE FROM observer_sessions WHERE expires_at IS NOT NULL AND expires_at < ?", [now]);
 }
 runCleanup(); // run once at startup
 setInterval(runCleanup, 5 * 60 * 1000);
@@ -220,9 +221,10 @@ function parseMentions(content: string): string[] {
   const botNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name);
   const observerNames = (db.query("SELECT username FROM observers WHERE status = 'active'").all() as any[]).map(r => r.username);
   const allUsernames = [...botNames, ...observerNames, ADMIN_USER];
-  return allUsernames.filter(username =>
-    new RegExp(`@${username}\\b`, "i").test(content)
-  );
+  return allUsernames.filter(username => {
+    const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`@${escaped}\\b`, "i").test(content);
+  });
 }
 
 // --- Webhook Delivery ---
@@ -255,6 +257,7 @@ async function deliverWebhooks(msg: Message) {
       headers,
       body: payload,
       signal: AbortSignal.timeout(5000),
+      redirect: "error",
     }).then((res) => {
       if (res.ok) {
         if (!deliveryReceipts.has(msg.id)) deliveryReceipts.set(msg.id, new Set());
@@ -1126,7 +1129,8 @@ app.get("/watch/login", (c) => {
     const session = db.query(
       `SELECT os.*, o.status FROM observer_sessions os
        JOIN observers o ON o.id = os.observer_id
-       WHERE os.token = ? AND o.status = 'active'`
+       WHERE os.token = ? AND o.status = 'active'
+       AND (os.expires_at IS NULL OR os.expires_at > datetime('now'))`
     ).get(token);
     if (session) return c.redirect("/");
   }
@@ -1155,9 +1159,10 @@ app.post("/watch/login", async (c) => {
   }
 
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   db.run(
-    "INSERT INTO observer_sessions (token, observer_id, created_at) VALUES (?, ?, ?)",
-    [token, observer.id, new Date().toISOString()]
+    "INSERT INTO observer_sessions (token, observer_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    [token, observer.id, new Date().toISOString(), expiresAt]
   );
 
   setCookie(c, "observer_session", token, {
@@ -2072,9 +2077,9 @@ function getInstallURLs(): string[] {
 // GET /admin/data — admin auth required
 app.get("/admin/data", requireAdmin, async (c) => {
   const pending = db.query("SELECT * FROM clients WHERE status = 'pending' ORDER BY registered_at DESC").all();
-  const active = db.query("SELECT * FROM clients WHERE status = 'active' ORDER BY last_seen DESC").all();
+  const active = db.query("SELECT id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url FROM clients WHERE status = 'active' ORDER BY last_seen DESC").all();
   const revoked = db.query("SELECT * FROM clients WHERE status = 'revoked'").all();
-  const observersList = db.query("SELECT * FROM observers ORDER BY created_at DESC").all();
+  const observersList = db.query("SELECT id, username, status, can_post, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
   const installURLs = getInstallURLs();
 
   return c.json({
@@ -2178,6 +2183,9 @@ app.post("/message", requirePostSession, async (c) => {
   if (!body.content || typeof body.content !== "string") {
     return c.json({ error: "Missing content" }, 400);
   }
+  if (body.content.length > 4096) {
+    return c.json({ error: "Message too long (max 4096 chars)" }, 400);
+  }
 
   const sender = c.get("sender") as string;
   const dedupKey = `${sender}:${body.content}`;
@@ -2231,7 +2239,7 @@ app.post("/messages/:id/read", requirePostSession, (c) => {
 
 // --- Webhook Registration (client self-service) ---
 
-const TAILNET_URL_RE = /^https?:\/\/(100\.\d+\.\d+\.\d+|[\w.-]+\.ts\.net)(:\d+)?(\/|$)/;
+const TAILNET_URL_RE = /^https?:\/\/(100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}|[\w.-]+\.ts\.net)(:\d+)?(\/|$)/;
 
 app.post("/webhook", requirePostSession, async (c) => {
   const body = await c.req.json<{ url: string }>();

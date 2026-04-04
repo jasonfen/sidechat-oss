@@ -9,15 +9,13 @@ if [[ ! -f "$MENTION_FILE" ]] || [[ ! -s "$MENTION_FILE" ]]; then
   exit 0
 fi
 
-CONTENT=$(cat "$MENTION_FILE")
-
-# Output JSON to inject context back to Claude
-cat <<HOOKJSON
-{
-  "systemMessage": "New @mentions detected — run /mention-check to handle them.",
-  "hookSpecificOutput": {
-    "hookEventName": "FileChanged",
-    "additionalContext": "New mentions arrived in .sidechat/new-mentions.txt:\n${CONTENT}\n\nRun /mention-check to process these."
-  }
-}
-HOOKJSON
+# Use jq to safely construct JSON — prevents prompt injection via message content
+jq -n \
+  --arg content "$(cat "$MENTION_FILE")" \
+  '{
+    "systemMessage": "New @mentions detected — run /mention-check to handle them.",
+    "hookSpecificOutput": {
+      "hookEventName": "FileChanged",
+      "additionalContext": ("New mentions arrived in .sidechat/new-mentions.txt:\n" + $content + "\n\nRun /mention-check to process these.")
+    }
+  }'
