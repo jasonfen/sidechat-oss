@@ -386,13 +386,23 @@ HOOKEOF
 )
 
 if [[ -f "$SETTINGS_FILE" ]]; then
-  # Merge settings: combine permission allow arrays (deduplicated), update hooks
-  jq -n '
-    input as $existing | input as $new |
-    ($existing.permissions.allow // []) + ($new.permissions.allow // []) | unique as $perms |
-    $existing | .permissions.allow = $perms | .hooks = $new.hooks
+  # Merge settings: combine permissions (deduplicated), merge hooks per event type.
+  # Removes existing sidechat hooks (matched by .sidechat/hooks/ in command path),
+  # then appends the new sidechat hooks. Preserves all non-sidechat hooks.
+  jq '
+    . as $existing | input as $new |
+    ($existing.hooks // {} | to_entries | map(
+      .value |= [.[] | select(
+        [.hooks[]?.command // empty] | all(contains(".sidechat/hooks/") | not)
+      )]
+    ) | from_entries) as $cleaned |
+    ([$cleaned, ($new.hooks // {})] | map(to_entries) | add | group_by(.key) | map(
+      {key: .[0].key, value: (map(.value) | add)}
+    ) | from_entries) as $merged |
+    (($existing.permissions.allow // []) + ($new.permissions.allow // []) | unique) as $perms |
+    $existing | .permissions.allow = $perms | .hooks = $merged
   ' "$SETTINGS_FILE" <(echo "$HOOKS_JSON") > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-  echo "  settings updated in $SETTINGS_FILE"
+  echo "  settings updated in $SETTINGS_FILE (hooks merged, non-sidechat hooks preserved)"
 else
   echo "$HOOKS_JSON" | jq . > "$SETTINGS_FILE"
   echo "  $SETTINGS_FILE created with hooks and permissions"
