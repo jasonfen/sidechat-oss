@@ -391,11 +391,14 @@ if [[ -f "$SETTINGS_FILE" ]]; then
   # then appends the new sidechat hooks. Preserves all non-sidechat hooks.
   jq '
     . as $existing | input as $new |
+    # Filter sidechat commands from inner hooks arrays, drop entries with no commands left
     ($existing.hooks // {} | to_entries | map(
-      .value |= [.[] | select(
-        [.hooks[]?.command // empty] | all(contains(".sidechat/hooks/") | not)
-      )]
+      .value |= [.[] |
+        .hooks |= [.[] | select(.command // "" | contains(".sidechat/hooks/") | not)] |
+        select(.hooks | length > 0)
+      ]
     ) | from_entries) as $cleaned |
+    # Concatenate cleaned + new per event type
     ([$cleaned, ($new.hooks // {})] | map(to_entries) | add | group_by(.key) | map(
       {key: .[0].key, value: (map(.value) | add)}
     ) | from_entries) as $merged |
