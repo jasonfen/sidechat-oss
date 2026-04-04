@@ -26,6 +26,10 @@ SERVER_URL = config.get('SERVER_URL', '')
 TOKEN = config.get('TOKEN', '')
 
 
+FILES_DIR = os.path.join(PROJECT_DIR, '.sidechat', 'files')
+os.makedirs(FILES_DIR, exist_ok=True)
+
+
 def ack_read(msg_id):
     """Send read receipt back to server in background."""
     if not SERVER_URL or not TOKEN:
@@ -37,6 +41,28 @@ def ack_read(msg_id):
         urllib.request.urlopen(req, timeout=5)
     except Exception:
         pass
+
+
+def download_file(file_id, filename):
+    """Download a file attachment from the server. Returns local path or None."""
+    if not SERVER_URL or not TOKEN:
+        return None
+    try:
+        url = f'{SERVER_URL}/files/{file_id}/download'
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {TOKEN}'})
+        resp = urllib.request.urlopen(req, timeout=30)
+        # Sanitize filename — keep only the basename
+        safe_name = os.path.basename(filename).replace('..', '_')
+        local_path = os.path.join(FILES_DIR, f'{file_id}_{safe_name}')
+        with open(local_path, 'wb') as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+        return local_path
+    except Exception:
+        return None
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -60,7 +86,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ts = msg.get('timestamp', '')
             if ts:
                 ts = ts.replace('T', ' ')[:19]
+            # Download any attached files
+            files = msg.get('files', [])
+            file_lines = []
+            for finfo in files:
+                fid = finfo.get('id', '')
+                fname = finfo.get('filename', 'unknown')
+                local = download_file(fid, fname)
+                if local:
+                    file_lines.append(f'  [file] {fname} -> {local}')
+
             line = f'[{ts}] {sender}: {content}\n'
+            if file_lines:
+                line += '\n'.join(file_lines) + '\n'
 
             mentions_path = os.path.join(PROJECT_DIR, '.sidechat', 'new-mentions.txt')
             with open(mentions_path, 'a') as f:
