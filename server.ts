@@ -739,10 +739,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   <div id="main">
     <div id="header">
       <h1>SideChat</h1>
-      <div id="status"><span class="dot disconnected" id="dot"></span><span id="status-text">Connecting...</span></div>
-      <div id="mention-bell" title="Unread mentions" style="display:none;cursor:pointer;position:relative;margin-left:12px;font-size:18px;">
-        <span id="bell-icon">&#x1F514;</span>
-        <span id="bell-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#f85149;color:#fff;border-radius:50%;font-size:11px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;font-weight:700;"></span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div id="status"><span class="dot disconnected" id="dot"></span><span id="status-text">Connecting...</span></div>
+        <div id="mention-bell" title="Unread mentions" style="display:none;cursor:pointer;position:relative;font-size:18px;">
+          <span id="bell-icon">&#x1F514;</span>
+          <span id="bell-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#f85149;color:#fff;border-radius:50%;font-size:11px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;font-weight:700;"></span>
+        </div>
+        <button id="signout-btn" style="background:none;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;padding:4px 12px;font-family:inherit;font-size:12px;cursor:pointer;" onmouseover="this.style.borderColor='#8b949e'" onmouseout="this.style.borderColor='#30363d'">Sign Out</button>
       </div>
     </div>
     <div id="messages"></div>
@@ -1218,6 +1221,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   }
 
   connectSSE();
+
+  document.getElementById('signout-btn').addEventListener('click', function() {
+    fetch('/watch/logout', { method: 'POST', credentials: 'same-origin' })
+      .then(function() { window.location.href = '/watch/login'; })
+      .catch(function() { window.location.href = '/watch/login'; });
+  });
 })();
 </script>
 </body>
