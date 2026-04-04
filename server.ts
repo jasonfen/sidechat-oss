@@ -3,6 +3,8 @@ import { Database } from "bun:sqlite";
 import { createHash } from "crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
+import { mkdirSync, unlinkSync, existsSync } from "fs";
+import { extname } from "path";
 
 // --- SQLite Database ---
 
@@ -61,6 +63,16 @@ db.exec(`
     created_at  TEXT NOT NULL,
     expires_at  TEXT
   );
+  CREATE TABLE IF NOT EXISTS files (
+    id          TEXT PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    mime_type   TEXT NOT NULL DEFAULT 'application/octet-stream',
+    uploader    TEXT NOT NULL,
+    message_id  INTEGER,
+    uploaded_at TEXT NOT NULL
+  );
 `);
 
 // --- Schema migrations ---
@@ -77,6 +89,15 @@ const SESSION_TTL_HOURS = parseInt(Bun.env.SESSION_TTL_HOURS ?? "24", 10);
 const NONCE_TTL_SECONDS = parseInt(Bun.env.NONCE_TTL_SECONDS ?? "60", 10);
 const ADMIN_SESSION_TTL_HOURS = parseInt(Bun.env.ADMIN_SESSION_TTL_HOURS ?? "8", 10);
 
+// --- File Transfer Config ---
+
+const FILES_DIR = Bun.env.FILES_DIR ?? "/var/sidechat/files";
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_TOTAL_STORAGE = parseInt(Bun.env.MAX_TOTAL_STORAGE ?? String(500 * 1024 * 1024), 10); // 500 MB
+const ORPHAN_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+try { mkdirSync(FILES_DIR, { recursive: true }); } catch {}
+
 // --- Cleanup Loop (every 5 minutes) ---
 
 function runCleanup() {
@@ -85,6 +106,24 @@ function runCleanup() {
   db.run("DELETE FROM sessions WHERE expires_at < ?", [now]);
   db.run("DELETE FROM admin_sessions WHERE expires_at < ?", [now]);
   db.run("DELETE FROM observer_sessions WHERE expires_at IS NOT NULL AND expires_at < ?", [now]);
+
+  // Clean up orphaned files (uploaded but never attached to a message)
+  const cutoff = new Date(Date.now() - ORPHAN_FILE_TTL_MS).toISOString();
+  const orphans = db.query(
+    "SELECT id, stored_name FROM files WHERE message_id IS NULL AND uploaded_at < ?"
+  ).all(cutoff) as { id: string; stored_name: string }[];
+  for (const orphan of orphans) {
+    try { unlinkSync(`${FILES_DIR}/${orphan.stored_name}`); } catch {}
+    db.run("DELETE FROM files WHERE id = ?", [orphan.id]);
+  }
+  if (orphans.length > 0) {
+    console.log(`Cleaned up ${orphans.length} orphaned file(s)`);
+  }
+}
+
+function getTotalFileStorage(): number {
+  const row = db.query("SELECT COALESCE(SUM(size), 0) as total FROM files").get() as { total: number };
+  return row.total;
 }
 runCleanup(); // run once at startup
 setInterval(runCleanup, 5 * 60 * 1000);
@@ -205,12 +244,20 @@ function getClientIP(c: Context): string {
 
 // --- Data Structures ---
 
+interface FileAttachment {
+  id: string;
+  filename: string;
+  size: number;
+  mime_type: string;
+}
+
 interface Message {
   id: number;
   timestamp: string;
   sender: string;
   content: string;
   mentions: string[];
+  files?: FileAttachment[];
 }
 
 let messages: Message[] = [];
@@ -501,6 +548,70 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     margin-top: 2px;
     padding-left: 2px;
   }
+  .msg-files {
+    margin-top: 4px;
+    padding-left: 2px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .file-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #58a6ff;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .file-badge:hover {
+    background: #21262d;
+    border-color: #58a6ff;
+  }
+  .file-badge .file-size {
+    color: #484f58;
+    font-size: 11px;
+  }
+  #pending-files {
+    display: none;
+    padding: 4px 16px 0;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .pending-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: #8b949e;
+  }
+  .pending-chip .remove-chip {
+    color: #f85149;
+    cursor: pointer;
+    font-weight: 700;
+    margin-left: 2px;
+  }
+  .pending-chip .remove-chip:hover { color: #ff7b72; }
+  #attach-btn {
+    background: none;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    cursor: pointer;
+    padding: 8px 10px;
+    font-size: 16px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  #attach-btn:hover { color: #c9d1d9; border-color: #58a6ff; }
   .date-divider {
     display: flex;
     align-items: center;
@@ -604,9 +715,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       </div>
     </div>
     <div id="messages"></div>
+    <div id="pending-files"></div>
     <div id="input-bar">
       <div id="autocomplete"></div>
       <form id="msg-form">
+        <button type="button" id="attach-btn" title="Attach file">&#x1F4CE;</button>
+        <input type="file" id="file-input" multiple style="display:none" />
         <input type="text" id="msg-input" placeholder="Type a message..." autocomplete="off" />
         <button type="submit" id="msg-send">Send</button>
       </form>
@@ -628,6 +742,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   var msgInput = document.getElementById('msg-input');
   var msgSend = document.getElementById('msg-send');
   var autocompleteEl = document.getElementById('autocomplete');
+  var attachBtn = document.getElementById('attach-btn');
+  var fileInput = document.getElementById('file-input');
+  var pendingFilesEl = document.getElementById('pending-files');
+  var pendingFiles = []; // { id, filename, size }
   var seen = new Set();
   var msgReceipts = {};
 
@@ -805,9 +923,22 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       if (msg.readBy && msg.readBy.length) parts.push('Read by ' + msg.readBy.join(', '));
       receiptsText = parts.join(' \\u00b7 ');
     }
+    var filesHtml = '';
+    if (msg.files && msg.files.length > 0) {
+      filesHtml = '<div class="msg-files">';
+      msg.files.forEach(function(f) {
+        var sizeStr = f.size < 1024 ? f.size + ' B'
+          : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB'
+          : (f.size / 1048576).toFixed(1) + ' MB';
+        filesHtml += '<a class="file-badge" href="/files/' + encodeURIComponent(f.id) + '/download" target="_blank">' +
+          '&#x1F4CE; ' + escapeHtml(f.filename) + ' <span class="file-size">(' + sizeStr + ')</span></a>';
+      });
+      filesHtml += '</div>';
+    }
     div.innerHTML =
       '<div class="msg-header"><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
+      filesHtml +
       '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
     messagesEl.appendChild(div);
     readObserver.observe(div);
@@ -924,21 +1055,85 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     }
   });
 
+  // File attach
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+
+  function renderPendingFiles() {
+    if (pendingFiles.length === 0) { pendingFilesEl.style.display = 'none'; return; }
+    pendingFilesEl.style.display = 'flex';
+    pendingFilesEl.innerHTML = '';
+    pendingFiles.forEach(function(pf, idx) {
+      var chip = document.createElement('span');
+      chip.className = 'pending-chip';
+      chip.innerHTML = escapeHtml(pf.filename) + ' <span class="file-size">(' + fmtSize(pf.size) + ')</span>' +
+        ' <span class="remove-chip" data-idx="' + idx + '">x</span>';
+      chip.querySelector('.remove-chip').addEventListener('click', function() {
+        pendingFiles.splice(idx, 1);
+        renderPendingFiles();
+      });
+      pendingFilesEl.appendChild(chip);
+    });
+  }
+
+  attachBtn.addEventListener('click', function() { fileInput.click(); });
+
+  fileInput.addEventListener('change', function() {
+    var files = fileInput.files;
+    if (!files || files.length === 0) return;
+    var uploading = 0;
+    attachBtn.style.opacity = '0.5';
+    for (var i = 0; i < files.length; i++) {
+      (function(f) {
+        uploading++;
+        var fd = new FormData();
+        fd.append('file', f);
+        fetch('/files/upload', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: SC_TOKEN ? { 'Authorization': 'Bearer ' + SC_TOKEN } : {},
+          body: fd
+        })
+        .then(function(r) {
+          if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || r.status); });
+          return r.json();
+        })
+        .then(function(data) {
+          pendingFiles.push({ id: data.id, filename: data.filename, size: data.size });
+          renderPendingFiles();
+        })
+        .catch(function(err) { alert('Upload failed: ' + err.message); })
+        .finally(function() { uploading--; if (uploading === 0) attachBtn.style.opacity = '1'; });
+      })(files[i]);
+    }
+    fileInput.value = '';
+  });
+
   // Send message
   msgForm.addEventListener('submit', function(e) {
     e.preventDefault();
     var content = msgInput.value.trim();
-    if (!content) return;
+    if (!content && pendingFiles.length === 0) return;
+    if (!content && pendingFiles.length > 0) content = pendingFiles.map(function(f) { return f.filename; }).join(', ');
     msgSend.disabled = true;
+    var payload = { content: content };
+    if (pendingFiles.length > 0) {
+      payload.file_ids = pendingFiles.map(function(f) { return f.id; });
+    }
     fetch('/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ content: content })
+      body: JSON.stringify(payload)
     })
     .then(function(r) {
       if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || r.status); });
       msgInput.value = '';
+      pendingFiles = [];
+      renderPendingFiles();
     })
     .catch(function(err) {
       alert('Failed to send: ' + err.message);
@@ -2083,10 +2278,18 @@ app.get("/admin/data", requireAdmin, async (c) => {
   const observersList = db.query("SELECT id, username, status, can_post, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
   const installURLs = getInstallURLs();
 
+  const fileStorageUsed = getTotalFileStorage();
+  const fileCount = (db.query("SELECT COUNT(*) as count FROM files").get() as any).count;
+
   return c.json({
     clients: { pending, active, revoked },
     observers: observersList,
     installURLs,
+    fileStorage: {
+      used: fileStorageUsed,
+      limit: MAX_TOTAL_STORAGE,
+      fileCount,
+    },
   });
 });
 
@@ -2174,13 +2377,75 @@ app.get("/users", requireSessionOrObserver, (c) => {
   return c.json({ users: [...botNames, ...observerNames, ADMIN_USER] });
 });
 
+// --- File Transfer ---
+
+// POST /files/upload — upload a file (multipart form data)
+app.post("/files/upload", requirePostSession, async (c) => {
+  const sender = c.get("sender") as string;
+
+  const body = await c.req.parseBody();
+  const file = body["file"];
+  if (!file || !(file instanceof File)) {
+    return c.json({ error: "Missing file field" }, 400);
+  }
+
+  if (file.size > MAX_FILE_SIZE) {
+    return c.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)` }, 413);
+  }
+
+  const currentUsage = getTotalFileStorage();
+  if (currentUsage + file.size > MAX_TOTAL_STORAGE) {
+    return c.json({ error: "Storage quota exceeded" }, 507);
+  }
+
+  const id = crypto.randomUUID();
+  const ext = extname(file.name || "").toLowerCase() || "";
+  const storedName = `${id}${ext}`;
+  const mimeType = file.type || "application/octet-stream";
+
+  const arrayBuf = await file.arrayBuffer();
+  await Bun.write(`${FILES_DIR}/${storedName}`, arrayBuf);
+
+  db.run(
+    "INSERT INTO files (id, filename, stored_name, size, mime_type, uploader, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [id, file.name || "unnamed", storedName, file.size, mimeType, sender, new Date().toISOString()]
+  );
+
+  return c.json({ id, filename: file.name, size: file.size, mime_type: mimeType }, 201);
+});
+
+// GET /files/storage — get current storage usage (any authenticated user)
+app.get("/files/storage", requireSessionOrObserver, (c) => {
+  const used = getTotalFileStorage();
+  return c.json({ used, limit: MAX_TOTAL_STORAGE, available: MAX_TOTAL_STORAGE - used });
+});
+
+// GET /files/:id/download — download a file
+app.get("/files/:id/download", requireSessionOrObserver, async (c) => {
+  const fileId = c.req.param("id");
+  const row = db.query("SELECT stored_name, filename, mime_type, size FROM files WHERE id = ?").get(fileId) as any;
+  if (!row) return c.json({ error: "File not found" }, 404);
+
+  const filepath = `${FILES_DIR}/${row.stored_name}`;
+  const file = Bun.file(filepath);
+  if (!(await file.exists())) return c.json({ error: "File not found on disk" }, 404);
+
+  return new Response(file, {
+    headers: {
+      "Content-Type": row.mime_type,
+      "Content-Disposition": `attachment; filename="${row.filename.replace(/"/g, '\\"')}"`,
+      "Content-Length": String(row.size),
+    },
+  });
+});
+
 // POST /message — post session required (bot bearer or observer cookie)
 // Server-side message dedup: reject identical content from same sender within window
 const recentMessages = new Map<string, number>(); // "sender:content" -> timestamp
 const DEDUP_WINDOW_MS = 5000; // 5 seconds
 
 app.post("/message", requirePostSession, async (c) => {
-  const body = await c.req.json<{ content: string }>();
+  const body = await c.req.json<{ content: string; file_ids?: string[] }>();
   if (!body.content || typeof body.content !== "string") {
     return c.json({ error: "Missing content" }, 400);
   }
@@ -2206,13 +2471,36 @@ app.post("/message", requirePostSession, async (c) => {
     }
   }
 
+  // Resolve file attachments
+  let files: FileAttachment[] | undefined;
+  if (body.file_ids && Array.isArray(body.file_ids) && body.file_ids.length > 0) {
+    files = [];
+    for (const fid of body.file_ids) {
+      const row = db.query(
+        "SELECT id, filename, size, mime_type, uploader FROM files WHERE id = ? AND uploader = ? AND message_id IS NULL"
+      ).get(fid, sender) as any;
+      if (!row) {
+        return c.json({ error: `Invalid file_id: ${fid}` }, 400);
+      }
+      files.push({ id: row.id, filename: row.filename, size: row.size, mime_type: row.mime_type });
+    }
+  }
+
   const msg: Message = {
     id: ++messageCounter,
     timestamp: new Date().toISOString(),
-    sender: c.get("sender") as string,
+    sender,
     content: body.content,
     mentions: parseMentions(body.content),
+    files,
   };
+
+  // Link files to this message
+  if (files) {
+    for (const f of files) {
+      db.run("UPDATE files SET message_id = ? WHERE id = ?", [msg.id, f.id]);
+    }
+  }
 
   messages.push(msg);
   broadcastEvent("message", msg);
