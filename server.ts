@@ -67,6 +67,7 @@ db.exec(`
 
 try { db.exec("ALTER TABLE clients ADD COLUMN webhook_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN webhook_secret TEXT"); } catch {}
+try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } catch {}
 
 // --- Config from env ---
 
