@@ -1393,6 +1393,23 @@ const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
 
 const app = new Hono();
 
+// --- Canonical URL redirect ---
+// Redirect HTTP / short hostname requests to the HTTPS FQDN
+const CANONICAL_HOST = Bun.env.CANONICAL_HOST ?? "";
+if (CANONICAL_HOST) {
+  app.use("*", async (c, next) => {
+    const host = c.req.header("host")?.split(":")[0] ?? "";
+    if (host && host !== CANONICAL_HOST && host !== "localhost" && host !== "127.0.0.1") {
+      const url = new URL(c.req.url);
+      url.protocol = "https:";
+      url.hostname = CANONICAL_HOST;
+      url.port = "";
+      return c.redirect(url.toString(), 301);
+    }
+    return next();
+  });
+}
+
 // GET /watch/login — observer login page
 app.get("/watch/login", (c) => {
   // If already authenticated, redirect to /
