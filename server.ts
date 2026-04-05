@@ -2819,6 +2819,19 @@ app.get("/events", requireSessionOrObserver, (c) => {
 
 const port = parseInt(Bun.env.PORT ?? "3000");
 
+// HTTP redirect server — redirects all HTTP traffic to canonical HTTPS URL
+if (CANONICAL_HOST) {
+  const httpPort = parseInt(Bun.env.HTTP_REDIRECT_PORT ?? "80");
+  Bun.serve({
+    port: httpPort,
+    fetch(req) {
+      const url = new URL(req.url);
+      return Response.redirect(`https://${CANONICAL_HOST}${url.pathname}${url.search}`, 301);
+    },
+  });
+  console.log(`HTTP redirect on :${httpPort} → https://${CANONICAL_HOST}`);
+}
+
 console.log(`SideChat v2 running
   Local:   http://localhost:${port}
   DB:      ${DB_PATH}
