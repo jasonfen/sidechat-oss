@@ -296,6 +296,14 @@ let messageCounter = 0;
 const readReceipts = new Map<number, Set<string>>();
 const deliveryReceipts = new Map<number, Set<string>>();
 
+// --- Prometheus Counters ---
+let webhookDeliveriesTotal = 0;
+let webhookDeliveriesFailedTotal = 0;
+let authAttemptsTotal = 0;
+let authAttemptsFailedTotal = 0;
+let messagesPostedTotal = 0;
+let fileUploadsTotal = 0;
+
 function parseMentions(content: string): string[] {
   const botNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name);
   const observerNames = (db.query("SELECT username FROM observers WHERE status = 'active'").all() as any[]).map(r => r.username);
@@ -342,8 +350,11 @@ async function deliverWebhooks(msg: Message) {
         if (!deliveryReceipts.has(msg.id)) deliveryReceipts.set(msg.id, new Set());
         deliveryReceipts.get(msg.id)!.add(client.name);
         broadcastEvent("delivered", { id: msg.id, bot: client.name });
+        webhookDeliveriesTotal++;
+      } else {
+        webhookDeliveriesFailedTotal++;
       }
-    }).catch(() => {});
+    }).catch(() => { webhookDeliveriesFailedTotal++; });
   }
 }
 
@@ -1434,19 +1445,23 @@ app.post("/watch/login", async (c) => {
     "SELECT * FROM observers WHERE username = ?"
   ).get(body.username) as any;
   if (!observer) {
+    authAttemptsFailedTotal++;
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
   if (observer.status === "revoked") {
+    authAttemptsFailedTotal++;
     return c.json({ error: "Account has been revoked" }, 403);
   }
 
   const valid = await Bun.password.verify(body.password, observer.password_hash);
   if (!valid) {
+    authAttemptsFailedTotal++;
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
 
+  authAttemptsTotal++;
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   db.run(
@@ -1477,6 +1492,59 @@ app.get("/", requireObserver, (c) => {
   const obs = c.get("observer") as any;
   const token = getCookie(c, "observer_session")!;
   return c.html(buildChatPage(obs.username, !!obs.can_post, token));
+});
+
+// GET /metrics — Prometheus exposition format, no auth
+app.get("/metrics", (c) => {
+  const uptime = process.uptime();
+  const mem = process.memoryUsage();
+  const lines = [
+    "# HELP sidechat_messages_posted_total Total messages posted",
+    "# TYPE sidechat_messages_posted_total counter",
+    `sidechat_messages_posted_total ${messagesPostedTotal}`,
+    "",
+    "# HELP sidechat_messages_in_memory Current messages in memory",
+    "# TYPE sidechat_messages_in_memory gauge",
+    `sidechat_messages_in_memory ${messages.length}`,
+    "",
+    "# HELP sidechat_sse_clients_active Active SSE connections",
+    "# TYPE sidechat_sse_clients_active gauge",
+    `sidechat_sse_clients_active ${sseClients.size}`,
+    "",
+    "# HELP sidechat_webhook_deliveries_total Total webhook deliveries",
+    "# TYPE sidechat_webhook_deliveries_total counter",
+    `sidechat_webhook_deliveries_total{status="success"} ${webhookDeliveriesTotal}`,
+    `sidechat_webhook_deliveries_total{status="failed"} ${webhookDeliveriesFailedTotal}`,
+    "",
+    "# HELP sidechat_auth_attempts_total Total auth attempts",
+    "# TYPE sidechat_auth_attempts_total counter",
+    `sidechat_auth_attempts_total{status="success"} ${authAttemptsTotal}`,
+    `sidechat_auth_attempts_total{status="failed"} ${authAttemptsFailedTotal}`,
+    "",
+    "# HELP sidechat_file_uploads_total Total file uploads",
+    "# TYPE sidechat_file_uploads_total counter",
+    `sidechat_file_uploads_total ${fileUploadsTotal}`,
+    "",
+    "# HELP sidechat_file_storage_bytes Current file storage usage",
+    "# TYPE sidechat_file_storage_bytes gauge",
+    `sidechat_file_storage_bytes ${getTotalFileStorage()}`,
+    "",
+    "# HELP process_heap_bytes Process heap size in bytes",
+    "# TYPE process_heap_bytes gauge",
+    `process_heap_bytes ${mem.heapUsed}`,
+    "",
+    "# HELP process_rss_bytes Process RSS in bytes",
+    "# TYPE process_rss_bytes gauge",
+    `process_rss_bytes ${mem.rss}`,
+    "",
+    "# HELP process_uptime_seconds Process uptime in seconds",
+    "# TYPE process_uptime_seconds gauge",
+    `process_uptime_seconds ${uptime}`,
+    "",
+  ];
+  return new Response(lines.join("\n"), {
+    headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" },
+  });
 });
 
 // GET /health — no auth
@@ -1937,15 +2005,15 @@ app.post("/auth/token", async (c) => {
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
   ).get(body.fingerprint) as any;
-  if (!client) return c.json({ error: "Client not approved" }, 403);
+  if (!client) { authAttemptsFailedTotal++; return c.json({ error: "Client not approved" }, 403); }
 
   const nonce = db.query(
     "SELECT * FROM nonces WHERE value = ? AND fingerprint = ? AND used = 0 AND expires_at > ?"
   ).get(body.nonce, body.fingerprint, new Date().toISOString()) as any;
-  if (!nonce) return c.json({ error: "Invalid or expired nonce" }, 401);
+  if (!nonce) { authAttemptsFailedTotal++; return c.json({ error: "Invalid or expired nonce" }, 401); }
 
   const valid = await verifySignature(client.public_key, body.nonce, body.signature);
-  if (!valid) return c.json({ error: "Signature verification failed" }, 401);
+  if (!valid) { authAttemptsFailedTotal++; return c.json({ error: "Signature verification failed" }, 401); }
 
   // Mark nonce as used
   db.run("UPDATE nonces SET used = 1 WHERE value = ?", [body.nonce]);
@@ -1963,6 +2031,7 @@ app.post("/auth/token", async (c) => {
   db.run("UPDATE clients SET last_seen = ?, last_ip = ? WHERE fingerprint = ?",
     [now.toISOString(), getClientIP(c), body.fingerprint]);
 
+  authAttemptsTotal++;
   return c.json({ token, expires_at: expiresAt.toISOString() });
 });
 
@@ -2574,6 +2643,7 @@ app.post("/files/upload", requirePostSession, async (c) => {
     [id, file.name || "unnamed", storedName, file.size, mimeType, sender, new Date().toISOString()]
   );
 
+  fileUploadsTotal++;
   return c.json({ id, filename: file.name, size: file.size, mime_type: mimeType }, 201);
 });
 
@@ -2673,6 +2743,7 @@ app.post("/message", requirePostSession, async (c) => {
   }
 
   messages.push(msg);
+  messagesPostedTotal++;
   broadcastEvent("message", msg);
   deliverWebhooks(msg);
 
