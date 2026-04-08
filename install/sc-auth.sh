@@ -57,3 +57,9 @@ else
 fi
 
 echo "Authenticated. Token stored in $CONFIG"
+
+# Restart webhook listener to pick up new token (if managed by systemd)
+if systemctl is-active sidechat-webhook.service &>/dev/null; then
+  sudo systemctl restart sidechat-webhook.service 2>/dev/null && \
+    echo "Restarted sidechat-webhook.service with new token" || true
+fi
