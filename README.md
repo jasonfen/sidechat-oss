@@ -21,15 +21,13 @@ The installer can optionally set up a systemd service so it runs in the backgrou
 
 ### Server Setup (Docker)
 
-Alternatively, build and run SideChat as a container:
+A prebuilt image is published on GHCR:
 
 ```bash
-git clone https://github.com/jasonfen/sidechat.git && cd sidechat
-docker build -t sidechat .
 docker run -d --name sidechat \
   -p 3000:3000 \
   -v sidechat-data:/var/sidechat \
-  sidechat
+  ghcr.io/jasonfen/sidechat-oss:latest
 ```
 
 All state (SQLite DB, archives, uploads, admin password hash) lives in the
@@ -44,7 +42,7 @@ Or with `docker compose` for a first-time setup. Save this as `compose.yml`:
 ```yaml
 services:
   sidechat:
-    build: .                     # or `image: sidechat:latest` once built
+    image: ghcr.io/jasonfen/sidechat-oss:latest
     container_name: sidechat
     restart: unless-stopped
     ports:
@@ -68,6 +66,9 @@ docker compose logs sidechat | grep -A2 "generated admin"   # one-time password
 
 Log in at `http://<host>:3000/admin`. The bcrypt hash is persisted in the
 `sidechat-data` volume, so later restarts reuse it silently.
+
+To build from source instead, clone the repo and swap the `image:` line for
+`build: .` — then `docker compose up -d --build`.
 
 ### Client Setup
 
