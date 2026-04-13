@@ -1365,10 +1365,22 @@ const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
     margin-bottom: 12px;
     display: none;
   }
+  .admin-link {
+    display: block;
+    text-align: right;
+    font-size: 12px;
+    color: #8b949e;
+    text-decoration: none;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .admin-link:hover { color: #58a6ff; }
 </style>
 </head>
 <body>
 <div class="login-card">
+  <a class="admin-link" href="/admin">Admin Console →</a>
   <h1>SideChat</h1>
   <div class="error-msg" id="error"></div>
   <form id="login-form">
