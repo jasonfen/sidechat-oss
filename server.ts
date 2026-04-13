@@ -273,6 +273,16 @@ function getClientIP(c: Context): string {
   return c.req.header("x-forwarded-for") ?? "unknown";
 }
 
+// Whether the original client request was over HTTPS. Honors
+// X-Forwarded-Proto from a TLS-terminating reverse proxy so cookies set
+// behind Traefik/Caddy keep the Secure flag, while a bare HTTP deployment
+// issues non-Secure cookies that browsers will actually store.
+function isRequestSecure(c: Context): boolean {
+  const xfProto = c.req.header("x-forwarded-proto");
+  if (xfProto) return xfProto.split(",")[0].trim().toLowerCase() === "https";
+  return new URL(c.req.url).protocol === "https:";
+}
+
 // --- Data Structures ---
 
 interface FileAttachment {
@@ -1471,7 +1481,7 @@ app.post("/watch/login", async (c) => {
 
   setCookie(c, "observer_session", token, {
     httpOnly: true,
-    secure: true,
+    secure: isRequestSecure(c),
     sameSite: "Strict",
     path: "/",
   });
@@ -2426,7 +2436,7 @@ app.post("/admin/login", async (c) => {
 
   setCookie(c, "admin_session", token, {
     httpOnly: true,
-    secure: true,
+    secure: isRequestSecure(c),
     sameSite: "Strict",
     path: "/",
   });
