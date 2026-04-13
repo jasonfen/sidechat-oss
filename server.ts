@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import { mkdirSync, unlinkSync, existsSync } from "fs";
@@ -272,6 +272,48 @@ function computeFingerprint(pubkeyLine: string): string {
 function getClientIP(c: Context): string {
   return c.req.header("x-forwarded-for") ?? "unknown";
 }
+
+// --- Auth rate limiting ---
+// Per-IP counter for failed auth attempts. Blocks brute force of weak
+// observer passwords and nonce flooding against /auth/challenge. Counts
+// only failures so a correct login doesn't burn the budget.
+const authRateLimit = new Map<string, { count: number; resetAt: number }>();
+const AUTH_RATE_WINDOW_MS = 60_000;
+const AUTH_RATE_MAX = 10;
+
+function checkAuthRateLimit(c: Context) {
+  const ip = getClientIP(c);
+  const now = Date.now();
+  const rec = authRateLimit.get(ip);
+  if (rec && rec.resetAt > now && rec.count >= AUTH_RATE_MAX) {
+    const retryAfter = Math.max(1, Math.ceil((rec.resetAt - now) / 1000));
+    return c.json(
+      { error: "Too many auth attempts — try again later" },
+      429,
+      { "Retry-After": String(retryAfter) }
+    );
+  }
+  return null;
+}
+
+function recordAuthFailure(c: Context) {
+  const ip = getClientIP(c);
+  const now = Date.now();
+  const rec = authRateLimit.get(ip);
+  if (!rec || rec.resetAt < now) {
+    authRateLimit.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
+  } else {
+    rec.count++;
+  }
+}
+
+// Periodic sweep so the map can't grow forever from one-off attackers.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of authRateLimit) {
+    if (rec.resetAt < now) authRateLimit.delete(ip);
+  }
+}, 5 * 60_000).unref?.();
 
 // Whether the original client request was over HTTPS. Honors
 // X-Forwarded-Proto from a TLS-terminating reverse proxy so cookies set
@@ -1467,6 +1509,8 @@ app.get("/watch/login", (c) => {
 
 // POST /watch/login — observer authentication
 app.post("/watch/login", async (c) => {
+  const limited = checkAuthRateLimit(c);
+  if (limited) return limited;
   const body = await c.req.json<{ username: string; password: string }>();
 
   const observer = db.query(
@@ -1474,17 +1518,20 @@ app.post("/watch/login", async (c) => {
   ).get(body.username) as any;
   if (!observer) {
     authAttemptsFailedTotal++;
+    recordAuthFailure(c);
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
   if (observer.status === "revoked") {
     authAttemptsFailedTotal++;
+    recordAuthFailure(c);
     return c.json({ error: "Account has been revoked" }, 403);
   }
 
   const valid = await Bun.password.verify(body.password, observer.password_hash);
   if (!valid) {
     authAttemptsFailedTotal++;
+    recordAuthFailure(c);
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
@@ -1522,8 +1569,22 @@ app.get("/", requireObserver, (c) => {
   return c.html(buildChatPage(obs.username, !!obs.can_post, token));
 });
 
-// GET /metrics — Prometheus exposition format, no auth
+// GET /metrics — Prometheus exposition format.
+// If METRICS_TOKEN is set, requires Authorization: Bearer <token>.
+// Otherwise stays open for backwards compatibility (startup warns).
+const METRICS_TOKEN = Bun.env.METRICS_TOKEN ?? "";
 app.get("/metrics", (c) => {
+  if (METRICS_TOKEN) {
+    const auth = c.req.header("authorization") ?? "";
+    const expected = `Bearer ${METRICS_TOKEN}`;
+    // Constant-time compare so a timing side-channel can't leak the token.
+    if (
+      auth.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
+    ) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
   const uptime = process.uptime();
   const mem = process.memoryUsage();
   const lines = [
@@ -2008,12 +2069,14 @@ app.post("/register", async (c) => {
 
 // GET /auth/challenge?fingerprint=<hex> — no auth required
 app.get("/auth/challenge", (c) => {
+  const limited = checkAuthRateLimit(c);
+  if (limited) return limited;
   const fingerprint = c.req.query("fingerprint");
-  if (!fingerprint) return c.json({ error: "Missing fingerprint" }, 400);
+  if (!fingerprint) { recordAuthFailure(c); return c.json({ error: "Missing fingerprint" }, 400); }
 
   const client = db.query("SELECT * FROM clients WHERE fingerprint = ?").get(fingerprint) as any;
-  if (!client) return c.json({ error: "Client not found" }, 404);
-  if (client.status !== "active") return c.json({ error: "Client not approved" }, 403);
+  if (!client) { recordAuthFailure(c); return c.json({ error: "Client not found" }, 404); }
+  if (client.status !== "active") { recordAuthFailure(c); return c.json({ error: "Client not approved" }, 403); }
 
   const nonce = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const expiresAt = new Date(Date.now() + NONCE_TTL_SECONDS * 1000).toISOString();
@@ -2028,20 +2091,22 @@ app.get("/auth/challenge", (c) => {
 
 // POST /auth/token — no auth required
 app.post("/auth/token", async (c) => {
+  const limited = checkAuthRateLimit(c);
+  if (limited) return limited;
   const body = await c.req.json<{ fingerprint: string; nonce: string; signature: string }>();
 
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
   ).get(body.fingerprint) as any;
-  if (!client) { authAttemptsFailedTotal++; return c.json({ error: "Client not approved" }, 403); }
+  if (!client) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Client not approved" }, 403); }
 
   const nonce = db.query(
     "SELECT * FROM nonces WHERE value = ? AND fingerprint = ? AND used = 0 AND expires_at > ?"
   ).get(body.nonce, body.fingerprint, new Date().toISOString()) as any;
-  if (!nonce) { authAttemptsFailedTotal++; return c.json({ error: "Invalid or expired nonce" }, 401); }
+  if (!nonce) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Invalid or expired nonce" }, 401); }
 
   const valid = await verifySignature(client.public_key, body.nonce, body.signature);
-  if (!valid) { authAttemptsFailedTotal++; return c.json({ error: "Signature verification failed" }, 401); }
+  if (!valid) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Signature verification failed" }, 401); }
 
   // Mark nonce as used
   db.run("UPDATE nonces SET used = 1 WHERE value = ?", [body.nonce]);
@@ -2431,15 +2496,19 @@ app.get("/admin", requireAdmin, (c) => {
 
 // POST /admin/login — no auth required
 app.post("/admin/login", async (c) => {
+  const limited = checkAuthRateLimit(c);
+  if (limited) return limited;
   const body = await c.req.json<{ username: string; password: string }>();
 
   if (body.username !== ADMIN_USER || !ADMIN_PASSWORD_HASH) {
+    recordAuthFailure(c);
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
 
   const valid = await Bun.password.verify(body.password, ADMIN_PASSWORD_HASH);
   if (!valid) {
+    recordAuthFailure(c);
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
@@ -2506,9 +2575,10 @@ function getInstallURLs(): string[] {
 
 // GET /admin/data — admin auth required
 app.get("/admin/data", requireAdmin, async (c) => {
-  const pending = db.query("SELECT * FROM clients WHERE status = 'pending' ORDER BY registered_at DESC").all();
-  const active = db.query("SELECT id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url FROM clients WHERE status = 'active' ORDER BY last_seen DESC").all();
-  const revoked = db.query("SELECT * FROM clients WHERE status = 'revoked'").all();
+  const CLIENT_COLS = "id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url";
+  const pending = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'pending' ORDER BY registered_at DESC`).all();
+  const active = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'active' ORDER BY last_seen DESC`).all();
+  const revoked = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'revoked'`).all();
   const observersList = db.query("SELECT id, username, status, can_post, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
   const installURLs = getInstallURLs();
 
@@ -2973,6 +3043,10 @@ console.log(`SideChat v2 running
   DB:      ${DB_PATH}
   Admin:   ${ADMIN_USER}
   Archive: ${ARCHIVE_DIR} (every 15 min)`);
+
+if (!METRICS_TOKEN) {
+  console.warn("  WARN: /metrics is public — set METRICS_TOKEN to gate it behind a bearer token");
+}
 
 export default {
   port,
