@@ -289,12 +289,3 @@ sidechat/
     └── commands/          # Claude Code slash commands
 ```
 
-## Ansible Deployment
-
-For infrastructure-managed deployments, an Ansible playbook is available in [`jasonfen/ansi`](https://github.com/jasonfen/ansi):
-
-```bash
-ansible-playbook playbooks/deploy-sidechat.yml
-```
-
-This handles Bun installation, admin credential generation, systemd setup, and Tailscale Serve configuration.
