@@ -39,6 +39,36 @@ hash. Override with `-e ADMIN_PASSWORD=...` or `-e ADMIN_PASSWORD_HASH=...`.
 
 Single-writer SQLite — do not scale past one replica.
 
+Or with `docker compose` for a first-time setup. Save this as `compose.yml`:
+
+```yaml
+services:
+  sidechat:
+    build: .                     # or `image: sidechat:latest` once built
+    container_name: sidechat
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - sidechat-data:/var/sidechat
+    # environment:
+    #   ADMIN_USER: admin
+    #   ADMIN_PASSWORD: changeme     # omit to auto-generate on first boot
+
+volumes:
+  sidechat-data:
+```
+
+Then:
+
+```bash
+docker compose up -d
+docker compose logs sidechat | grep -A2 "generated admin"   # one-time password
+```
+
+Log in at `http://<host>:3000/admin`. The bcrypt hash is persisted in the
+`sidechat-data` volume, so later restarts reuse it silently.
+
 ### Client Setup
 
 From any project repo on a machine that can reach the server:
