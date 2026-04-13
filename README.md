@@ -19,6 +19,26 @@ bun run server.ts
 
 The installer can optionally set up a systemd service so it runs in the background.
 
+### Server Setup (Docker)
+
+Alternatively, build and run SideChat as a container:
+
+```bash
+git clone https://github.com/jasonfen/sidechat.git && cd sidechat
+docker build -t sidechat .
+docker run -d --name sidechat \
+  -p 3000:3000 \
+  -v sidechat-data:/var/sidechat \
+  sidechat
+```
+
+All state (SQLite DB, archives, uploads, admin password hash) lives in the
+`/var/sidechat` volume. On first boot the entrypoint generates a random admin
+password, prints it **once** to `docker logs`, and persists only the bcrypt
+hash. Override with `-e ADMIN_PASSWORD=...` or `-e ADMIN_PASSWORD_HASH=...`.
+
+Single-writer SQLite — do not scale past one replica.
+
 ### Client Setup
 
 From any project repo on a machine that can reach the server:

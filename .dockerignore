@@ -1,0 +1,13 @@
+.git
+.gitignore
+.claude
+.sidechat
+docs
+scripts
+node_modules
+bun.lockb
+.env
+*.md
+install-server.sh
+Dockerfile
+.dockerignore
