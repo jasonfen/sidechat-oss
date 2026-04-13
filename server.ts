@@ -372,6 +372,12 @@ async function deliverWebhooks(msg: Message) {
 
 const sseClients = new Set<(event: string, data: any) => void>();
 
+// Per-sender open-connection counter. A runaway or malicious bot that opens
+// dozens of SSE streams can exhaust file descriptors and the 15s heartbeat
+// timers, so cap at a generous-but-bounded limit per identity.
+const sseConnectionsPerSender = new Map<string, number>();
+const MAX_SSE_CONNECTIONS_PER_SENDER = 5;
+
 function broadcastEvent(event: string, data: any) {
   sseClients.forEach((send) => send(event, data));
 }
@@ -2627,9 +2633,30 @@ app.get("/users", requireSessionOrObserver, (c) => {
 
 // --- File Transfer ---
 
+// Safe MIME types served back verbatim on download. Everything else gets
+// forced to application/octet-stream so browsers won't auto-render an
+// attacker-chosen Content-Type (e.g. text/html with inline script).
+const ALLOWED_DOWNLOAD_MIME = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+  "application/pdf",
+  "text/plain", "text/csv", "text/markdown",
+  "application/json", "application/zip", "application/gzip", "application/x-tar",
+  "video/mp4", "video/webm",
+  "audio/mpeg", "audio/ogg", "audio/wav",
+]);
+
 // POST /files/upload — upload a file (multipart form data)
 app.post("/files/upload", requirePostSession, async (c) => {
   const sender = c.get("sender") as string;
+  const limits = getFileSettings();
+
+  // Reject oversized requests before buffering the body into memory.
+  // Multipart overhead can push Content-Length a bit above the file size,
+  // so allow a 64 KiB margin for form-data framing.
+  const contentLength = parseInt(c.req.header("content-length") ?? "0", 10);
+  if (contentLength > limits.max_file_size + 65536) {
+    return c.json({ error: `File too large (max ${limits.max_file_size / 1024 / 1024}MB)` }, 413);
+  }
 
   const body = await c.req.parseBody();
   const file = body["file"];
@@ -2637,7 +2664,6 @@ app.post("/files/upload", requirePostSession, async (c) => {
     return c.json({ error: "Missing file field" }, 400);
   }
 
-  const limits = getFileSettings();
   if (file.size > limits.max_file_size) {
     return c.json({ error: `File too large (max ${limits.max_file_size / 1024 / 1024}MB)` }, 413);
   }
@@ -2655,7 +2681,8 @@ app.post("/files/upload", requirePostSession, async (c) => {
   const id = crypto.randomUUID();
   const ext = extname(file.name || "").toLowerCase() || "";
   const storedName = `${id}${ext}`;
-  const mimeType = file.type || "application/octet-stream";
+  const declared = (file.type || "").toLowerCase().split(";")[0].trim();
+  const mimeType = ALLOWED_DOWNLOAD_MIME.has(declared) ? declared : "application/octet-stream";
 
   const arrayBuf = await file.arrayBuffer();
   await Bun.write(`${FILES_DIR}/${storedName}`, arrayBuf);
@@ -2692,11 +2719,18 @@ app.get("/files/:id/download", requireSessionOrObserver, async (c) => {
   const file = Bun.file(filepath);
   if (!(await file.exists())) return c.json({ error: "File not found on disk" }, 404);
 
+  // Re-validate against the allowlist on the way out: legacy rows stored
+  // before the upload-side allowlist may still hold attacker-chosen types.
+  const safeMime = ALLOWED_DOWNLOAD_MIME.has((row.mime_type || "").toLowerCase())
+    ? row.mime_type
+    : "application/octet-stream";
+
   return new Response(file, {
     headers: {
-      "Content-Type": row.mime_type,
+      "Content-Type": safeMime,
       "Content-Disposition": `attachment; filename="${row.filename.replace(/"/g, '\\"')}"`,
       "Content-Length": String(row.size),
+      "X-Content-Type-Options": "nosniff",
     },
   });
 });
@@ -2857,6 +2891,12 @@ app.get("/events", requireSessionOrObserver, (c) => {
   const username = client?.name ?? observer?.username ?? "unknown";
   const userCanPost = client ? !!client.can_post : (observer ? !!observer.can_post : false);
 
+  const openCount = sseConnectionsPerSender.get(username) ?? 0;
+  if (openCount >= MAX_SSE_CONNECTIONS_PER_SENDER) {
+    return c.json({ error: "Too many open SSE connections for this user" }, 429);
+  }
+  sseConnectionsPerSender.set(username, openCount + 1);
+
   let cleanup: () => void;
   const stream = new ReadableStream({
     type: "direct",
@@ -2886,6 +2926,9 @@ app.get("/events", requireSessionOrObserver, (c) => {
       cleanup = () => {
         clearInterval(heartbeat);
         sseClients.delete(send);
+        const n = (sseConnectionsPerSender.get(username) ?? 1) - 1;
+        if (n <= 0) sseConnectionsPerSender.delete(username);
+        else sseConnectionsPerSender.set(username, n);
       };
 
       // Keep the stream open until the client disconnects
