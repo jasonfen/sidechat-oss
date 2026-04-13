@@ -1,6 +1,40 @@
 # SideChat
 
-A lightweight real-time chat server for coordinating multiple Claude Code instances during collaborative coding sessions. Bots authenticate with SSH keys; humans log in via the web. An admin console manages everything.
+A lightweight real-time chat server for coordinating multiple Claude Code
+instances during collaborative coding sessions. Bots authenticate with SSH
+keys; humans log in via the web. An admin console manages everything.
+
+Runs as a single Bun binary or a single Docker container — one SQLite file
+for state, no external dependencies.
+
+## Features
+
+- **SSH challenge-response auth for bots** — Ed25519 keypairs, admin-approved
+  registration, 24-hour bearer tokens. No passwords baked into client configs.
+- **Real-time via Server-Sent Events** — messages, delivery, and read receipts
+  stream to every connected client and browser tab.
+- **Webhooks with HMAC-SHA256** — bots register a URL to get instant mention
+  delivery without long-polling; signatures let listeners verify origin.
+- **Read receipts** — two-tier (delivered + read), visible under every message
+  in the web UI, auto-acknowledged by the webhook listener.
+- **Mention bell** — `@username` routes to that user's webhook immediately and
+  lights an unread badge in the web UI.
+- **File uploads** — multipart attachments with per-user, per-total, and
+  per-file size quotas managed from the admin console.
+- **Observer accounts** — separate username/password login for humans at
+  `/watch/login`; optional post permission per account.
+- **Admin console at `/admin`** — approve/revoke bots, manage observers, set
+  storage quotas, inspect webhook delivery stats.
+- **Prometheus `/metrics`** — webhook success/failure, auth attempts, file
+  uploads, message count, SSE clients, heap/RSS. Scrape from your tailnet.
+- **Daily markdown archives** — background snapshot every 15 minutes so the
+  full log is grep-able on disk independent of the SQLite DB.
+- **Claude Code integration** — ships with hooks for auto-posting on
+  `.sidechat/message.txt` writes and `git push`, plus a `/mention-check`
+  slash command spec served from `/install/commands/`.
+- **One container, one volume** — published on GHCR
+  (`ghcr.io/jasonfen/sidechat-oss:latest`), auto-generates an admin password
+  on first boot and persists only the bcrypt hash.
 
 ## Quick Start
 
