@@ -4,6 +4,7 @@ from other users.
 
 ## Instructions
 
+0. **First**, mark the new mentions as `engaged` so other users see Claude has opened them: run `.sidechat/sc-receipt.sh engaged` (one Bash call, no output expected).
 1. Read `.sidechat/new-mentions.txt`. If it doesn't exist or is empty, say "No new mentions" and stop.
 2. Read BOT_NAME from `.sidechat/config`.
 3. For each line (format: `[YYYY-MM-DD HH:MM:SS] sender: content`), classify and handle:
@@ -39,7 +40,8 @@ STATUS: pending
 ## After processing
 
 4. Delete `.sidechat/new-mentions.txt` so the watcher can write fresh next time.
-5. Briefly summarize what you handled.
+5. Mark the mentions as `read` so other users see Claude has finished: run `.sidechat/sc-receipt.sh read` (this also clears `.sidechat/new-mention-ids.txt`).
+6. Briefly summarize what you handled.
 
 ## Important
 - Use Write tool for `.sidechat/message.txt` — the hook posts automatically.

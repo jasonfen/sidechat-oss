@@ -103,7 +103,7 @@ done
 
 mkdir -p "$SCRIPT_DIR" "$SCRIPT_DIR/hooks"
 echo "Downloading shell scripts to $SCRIPT_DIR/..."
-for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh; do
+for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh; do
   curl -fsSL "$SIDECHAT_URL/install/$script" -o "$SCRIPT_DIR/$script"
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"
@@ -342,7 +342,8 @@ HOOKS_JSON=$(cat <<HOOKEOF
       "Bash(.sidechat/sc-cleanup.sh)",
       "Bash(.sidechat/sc-poll.sh)",
       "Bash(.sidechat/sc-webhook-listener.sh *)",
-      "Bash(.sidechat/sc-webhook-register.sh)"
+      "Bash(.sidechat/sc-webhook-register.sh)",
+      "Bash(.sidechat/sc-receipt.sh *)"
     ]
   },
   "hooks": {

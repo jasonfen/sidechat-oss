@@ -369,6 +369,7 @@ let messages: Message[] = [];
 let messageCounter = 0;
 const readReceipts = new Map<number, Set<string>>();
 const deliveryReceipts = new Map<number, Set<string>>();
+const engagedReceipts = new Map<number, Set<string>>();
 
 // --- Prometheus Counters ---
 let webhookDeliveriesTotal = 0;
@@ -465,6 +466,7 @@ async function writeSnapshot() {
       messageCounter,
       readReceipts: [...readReceipts].map(([k, v]) => [k, [...v]]),
       deliveryReceipts: [...deliveryReceipts].map(([k, v]) => [k, [...v]]),
+      engagedReceipts: [...engagedReceipts].map(([k, v]) => [k, [...v]]),
     }));
   } catch (err) {
     console.error(`Snapshot failed: ${err}`);
@@ -526,6 +528,9 @@ try {
     }
     if (data.deliveryReceipts) {
       for (const [k, v] of data.deliveryReceipts) deliveryReceipts.set(k, new Set(v));
+    }
+    if (data.engagedReceipts) {
+      for (const [k, v] of data.engagedReceipts) engagedReceipts.set(k, new Set(v));
     }
     console.log(`Rehydrated ${messages.length} messages from snapshot`);
   }
@@ -1215,13 +1220,16 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   var msgReceipts = {};
 
   function updateReceipts(id, type, name) {
-    if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [] };
-    var list = type === 'read' ? msgReceipts[id].readBy : msgReceipts[id].deliveredTo;
+    if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [], engagedBy: [] };
+    var list = type === 'read' ? msgReceipts[id].readBy
+             : type === 'engaged' ? msgReceipts[id].engagedBy
+             : msgReceipts[id].deliveredTo;
     if (list.indexOf(name) === -1) list.push(name);
     var el = document.getElementById('receipts-' + id);
     if (!el) return;
     var parts = [];
     if (msgReceipts[id].deliveredTo.length) parts.push('Delivered to ' + msgReceipts[id].deliveredTo.join(', '));
+    if (msgReceipts[id].engagedBy.length) parts.push('Engaged by ' + msgReceipts[id].engagedBy.join(', '));
     if (msgReceipts[id].readBy.length) parts.push('Read by ' + msgReceipts[id].readBy.join(', '));
     el.textContent = parts.join(' \\u00b7 ');
   }
@@ -1614,10 +1622,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     var time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     var color = getSenderColor(msg.sender);
     var receiptsText = '';
-    if (msg.deliveredTo || msg.readBy) {
-      msgReceipts[msg.id] = { readBy: msg.readBy || [], deliveredTo: msg.deliveredTo || [] };
+    if (msg.deliveredTo || msg.readBy || msg.engagedBy) {
+      msgReceipts[msg.id] = { readBy: msg.readBy || [], deliveredTo: msg.deliveredTo || [], engagedBy: msg.engagedBy || [] };
       var parts = [];
       if (msg.deliveredTo && msg.deliveredTo.length) parts.push('Delivered to ' + msg.deliveredTo.join(', '));
+      if (msg.engagedBy && msg.engagedBy.length) parts.push('Engaged by ' + msg.engagedBy.join(', '));
       if (msg.readBy && msg.readBy.length) parts.push('Read by ' + msg.readBy.join(', '));
       receiptsText = parts.join(' \\u00b7 ');
     }
@@ -1882,6 +1891,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       try {
         var data = JSON.parse(e.data);
         updateReceipts(data.id, 'read', data.reader);
+      } catch(err) {}
+    });
+
+    es.addEventListener('engaged', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        updateReceipts(data.id, 'engaged', data.engager);
       } catch(err) {}
     });
 
@@ -3551,7 +3567,7 @@ app.post("/message", requirePostSession, async (c) => {
   return c.json({ id: msg.id, timestamp: msg.timestamp }, 201);
 });
 
-// POST /messages/:id/read — mark message as read
+// POST /messages/:id/read — mark message as read (Claude finished processing)
 app.post("/messages/:id/read", requirePostSession, (c) => {
   const id = parseInt(c.req.param("id"), 10);
   if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
@@ -3564,6 +3580,24 @@ app.post("/messages/:id/read", requirePostSession, (c) => {
   readReceipts.get(id)!.add(reader);
   if (wasNew) {
     broadcastEvent("read", { id, reader });
+  }
+  return c.json({ status: "ok" }, 200);
+});
+
+// POST /messages/:id/engaged — mark message as engaged (Claude opened it)
+app.post("/messages/:id/engaged", requirePostSession, (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
+  if (!messages.some(m => m.id === id)) {
+    return c.json({ error: "Message not found" }, 404);
+  }
+  const engager = c.get("sender") as string;
+  if (!engagedReceipts.has(id)) engagedReceipts.set(id, new Set());
+  const wasNew = !engagedReceipts.get(id)!.has(engager);
+  engagedReceipts.get(id)!.add(engager);
+  if (wasNew) {
+    broadcastEvent("engaged", { id, engager });
+    logEvent("message.engaged", { id, engager });
   }
   return c.json({ status: "ok" }, 200);
 });
@@ -3606,6 +3640,7 @@ function withReceipts(msgs: Message[]) {
     ...m,
     readBy: [...(readReceipts.get(m.id) ?? [])],
     deliveredTo: [...(deliveryReceipts.get(m.id) ?? [])],
+    engagedBy: [...(engagedReceipts.get(m.id) ?? [])],
   }));
 }
 

@@ -104,10 +104,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with open(mentions_path, 'a') as f:
                 f.write(line)
 
-            # Acknowledge read receipt in background
+            # Track message ids so /mention-check can fire engaged + read receipts
             msg_id = msg.get('id')
             if msg_id is not None:
-                threading.Thread(target=ack_read, args=(msg_id,), daemon=True).start()
+                ids_path = os.path.join(PROJECT_DIR, '.sidechat', 'new-mention-ids.txt')
+                with open(ids_path, 'a') as f:
+                    f.write(f'{msg_id}\n')
 
             try:
                 subprocess.run(
