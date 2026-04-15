@@ -1995,7 +1995,7 @@ app.get("/install/:script", async (c) => {
   const script = c.req.param("script");
 
   // Only allow known script filenames — prevent directory traversal
-  if (!/^[a-z0-9_-]+\.sh$/.test(script)) {
+  if (!/^[a-z0-9_-]+\.(sh|py)$/.test(script)) {
     return c.json({ error: "Not found" }, 404);
   }
 
