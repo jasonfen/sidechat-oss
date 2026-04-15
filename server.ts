@@ -1156,8 +1156,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     calViewYear = t.getFullYear();
     calViewMonth = t.getMonth();
     renderCalendar();
-    var target = document.getElementById('date-' + todayKey());
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   });
   (function initCal(){
     var t = new Date();
