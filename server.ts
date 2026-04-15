@@ -1136,7 +1136,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
           try { rendered = marked.parse(text, { breaks: true, gfm: true }); }
           catch (e) { rendered = '<pre>' + escapeHtml(text) + '</pre>'; }
           body.innerHTML = DOMPurify.sanitize(rendered, {
-            FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+            // img dropped so a tracker pixel in attacker-supplied markdown
+            // can't exfil a page visit to an external host.
+            FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'img', 'svg', 'math'],
             FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick'],
             ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
           });
