@@ -603,7 +603,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     color: #c9d1d9;
     letter-spacing: 0.3px;
   }
-  #cal-prev, #cal-next {
+  #cal-prev, #cal-next, #cal-today {
     background: none;
     border: none;
     color: #8b949e;
@@ -612,7 +612,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     padding: 0 6px;
     line-height: 1;
   }
-  #cal-prev:hover, #cal-next:hover { color: #c9d1d9; }
+  #cal-today { font-size: 9px; color: #484f58; }
+  #cal-prev:hover, #cal-next:hover, #cal-today:hover { color: #58a6ff; }
   #cal-dow, #cal-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
@@ -966,6 +967,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       <div id="cal-header">
         <button id="cal-prev" title="Previous month">&lsaquo;</button>
         <span id="cal-title"></span>
+        <button id="cal-today" title="Jump to today">&#x25CF;</button>
         <button id="cal-next" title="Next month">&rsaquo;</button>
       </div>
       <div id="cal-dow"></div>
@@ -1148,6 +1150,14 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     calViewMonth++;
     if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
     renderCalendar();
+  });
+  document.getElementById('cal-today').addEventListener('click', function(){
+    var t = new Date();
+    calViewYear = t.getFullYear();
+    calViewMonth = t.getMonth();
+    renderCalendar();
+    var target = document.getElementById('date-' + todayKey());
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   (function initCal(){
     var t = new Date();
