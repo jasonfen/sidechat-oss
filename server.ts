@@ -800,6 +800,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     #header h1 { font-size: 15px; }
     #messages { padding: 8px 10px; }
     #input-bar { padding: 6px 8px; }
+    #input-bar form { gap: 6px; }
+    #input-bar input { font-size: 16px; padding: 6px 10px; min-width: 0; }
+    #input-bar button { padding: 6px 10px; font-size: 14px; flex-shrink: 0; }
+    #attach-btn { padding: 0 6px; flex-shrink: 0; }
     .msg { font-size: 13px; }
     #files-panel { max-height: 35vh; }
     #md-overlay { padding: 2vh 2vw; }
