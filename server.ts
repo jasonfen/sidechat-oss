@@ -2476,17 +2476,17 @@ app.get("/install/:script", async (c) => {
 
 async function requireSession(c: Context, next: Next) {
   const token = c.req.header("Authorization")?.replace("Bearer ", "") ?? c.req.query("token");
-  if (!token) return c.json({ error: "Unauthorized" }, 401);
+  if (!token) { logEvent("session.denied", { ip: getClientIP(c), reason: "no_bearer", path: c.req.path }); return c.json({ error: "Unauthorized" }, 401); }
 
   const session = db.query(
     "SELECT * FROM sessions WHERE token = ? AND expires_at > ?"
   ).get(token, new Date().toISOString()) as any;
-  if (!session) return c.json({ error: "Invalid or expired session" }, 401);
+  if (!session) { logEvent("session.denied", { ip: getClientIP(c), reason: "bad_bearer_or_expired", path: c.req.path }); return c.json({ error: "Invalid or expired session" }, 401); }
 
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
   ).get(session.fingerprint) as any;
-  if (!client) return c.json({ error: "Client revoked" }, 401);
+  if (!client) { logEvent("session.denied", { ip: getClientIP(c), reason: "client_revoked", path: c.req.path }); return c.json({ error: "Client revoked" }, 401); }
 
   db.run(
     "UPDATE clients SET last_seen = ?, last_ip = ? WHERE fingerprint = ?",
@@ -2536,6 +2536,7 @@ async function requirePostSession(c: Context, next: Next) {
     }
   }
 
+  logEvent("session.denied", { ip: getClientIP(c), reason: token ? "bad_bearer_or_expired" : (observerToken ? "bad_observer_session" : "no_bearer"), path: c.req.path });
   return c.json({ error: "Unauthorized" }, 401);
 }
 
@@ -2592,6 +2593,7 @@ async function requireSessionOrObserver(c: Context, next: Next) {
     }
   }
 
+  logEvent("session.denied", { ip: getClientIP(c), reason: (token || cookieToken) ? "bad_bearer_or_expired" : "no_bearer", path: c.req.path });
   return c.json({ error: "Unauthorized" }, 401);
 }
 
