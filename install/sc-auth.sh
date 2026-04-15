@@ -37,9 +37,15 @@ fi
 # Extract base64 body (strip PEM armor headers)
 SIG=$(echo "$SSH_SIG" | grep -v '^-----' | tr -d '\n')
 
-# Exchange signature for session token
+# Exchange signature for session token. Send our installed-script version
+# (recorded by sc-update.sh) so the server can show per-bot version status.
+SCRIPT_DIR_LOCAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_VERSION=$(cat "$SCRIPT_DIR_LOCAL/sc-version.txt" 2>/dev/null || echo "")
+VERSION_HEADER=()
+[[ -n "$CLIENT_VERSION" ]] && VERSION_HEADER=(-H "X-SideChat-Client-Version: $CLIENT_VERSION")
 TOKEN_RESPONSE=$(curl -sf -X POST "$SERVER_URL/auth/token" \
   -H "Content-Type: application/json" \
+  "${VERSION_HEADER[@]}" \
   -d "{\"fingerprint\":\"$FINGERPRINT\",\"nonce\":\"$NONCE\",\"signature\":\"$SIG\"}")
 
 TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.token')

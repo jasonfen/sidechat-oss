@@ -25,6 +25,12 @@ COPY --chown=bun:bun install ./install
 COPY --chown=bun:bun docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
+# Build-time SHA stamp (set via --build-arg BUILD_SHA=<short-sha>).
+# Server reads /app/version.txt at startup and exposes it via /version
+# and /install/version so clients can detect they're behind.
+ARG BUILD_SHA=unknown
+RUN echo "${BUILD_SHA}" > /app/version.txt
+
 USER bun
 
 ENV PORT=3000 \

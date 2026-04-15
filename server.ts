@@ -84,6 +84,11 @@ db.exec(`
 try { db.exec("ALTER TABLE clients ADD COLUMN webhook_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN webhook_secret TEXT"); } catch {}
 try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } catch {}
+try { db.exec("ALTER TABLE clients ADD COLUMN last_known_version TEXT"); } catch {}
+
+// --- Build version (stamped at image build via --build-arg BUILD_SHA) ---
+let SERVER_VERSION = "unknown";
+try { SERVER_VERSION = (await Bun.file(`${import.meta.dir}/version.txt`).text()).trim() || "unknown"; } catch {}
 
 // --- Config from env ---
 
@@ -2269,6 +2274,16 @@ app.get("/metrics", (c) => {
 });
 
 // GET /health — no auth
+// GET /version — current build SHA, no auth, machine-readable
+app.get("/version", (c) => {
+  return c.json({ sha: SERVER_VERSION });
+});
+
+// GET /install/version — same value as text/plain so sc-update.sh can curl it
+app.get("/install/version", (c) => {
+  return c.text(SERVER_VERSION + "\n");
+});
+
 app.get("/health", (c) => {
   const accept = c.req.header("Accept") ?? "";
   const uptime = process.uptime();
@@ -2763,11 +2778,12 @@ app.post("/auth/token", async (c) => {
     [token, body.fingerprint, expiresAt.toISOString(), now.toISOString()]
   );
 
-  db.run("UPDATE clients SET last_seen = ?, last_ip = ? WHERE fingerprint = ?",
-    [now.toISOString(), getClientIP(c), body.fingerprint]);
+  const clientVersion = c.req.header("X-SideChat-Client-Version") ?? null;
+  db.run("UPDATE clients SET last_seen = ?, last_ip = ?, last_known_version = COALESCE(?, last_known_version) WHERE fingerprint = ?",
+    [now.toISOString(), getClientIP(c), clientVersion, body.fingerprint]);
 
   authAttemptsTotal++;
-  logEvent("auth.token.issued", { fingerprint: body.fingerprint, username: client.name, ip });
+  logEvent("auth.token.issued", { fingerprint: body.fingerprint, username: client.name, ip, client_version: clientVersion });
   return c.json({ token, expires_at: expiresAt.toISOString() });
 });
 
@@ -2959,6 +2975,7 @@ app.get("/admin", requireAdmin, (c) => {
 <div class="toast" id="toast"></div>
 <script>
 (function() {
+  var SERVER_VERSION_FOR_UI = '${SERVER_VERSION}';
   function relTime(iso) {
     if (!iso) return '<span class="dim">never</span>';
     var d = new Date(iso);
@@ -2999,10 +3016,19 @@ app.get("/admin", requireAdmin, (c) => {
   function renderActive(clients) {
     document.getElementById('active-count').textContent = '(' + clients.length + ')';
     if (!clients.length) { document.getElementById('active-body').innerHTML = '<div class="empty">No active clients</div>'; return; }
-    var html = '<table><tr><th>Name</th><th>Fingerprint</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Webhook</th><th>Actions</th></tr>';
+    var html = '<table><tr><th>Name</th><th>Fingerprint</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Webhook</th><th>Version</th><th>Actions</th></tr>';
     clients.forEach(function(c) {
+      var ver = c.last_known_version || '';
+      var verBadge = '';
+      if (ver) {
+        var match = SERVER_VERSION_FOR_UI && ver === SERVER_VERSION_FOR_UI;
+        verBadge = '<span title="' + esc(ver) + '" style="color:' + (match ? '#3fb950' : '#f85149') + ';font-family:monospace;font-size:11px;">' + (match ? '\u25cf ' : '\u25cb ') + esc(ver.slice(0, 7)) + '</span>';
+      } else {
+        verBadge = '<span style="color:#484f58;font-style:italic;font-size:11px;">unknown</span>';
+      }
       html += '<tr><td>' + esc(c.name) + '</td><td class="fp">' + esc(c.fingerprint.slice(0,16)) + '&hellip;</td><td>' + (c.can_post ? 'yes' : 'no') + '</td><td>' + relTime(c.last_seen) + '</td><td>' + esc(c.last_ip || '') + '</td>';
       html += '<td>' + (c.webhook_url ? '<span class="fp" title="' + esc(c.webhook_url) + '">webhook</span> ' : '') + '</td>';
+      html += '<td>' + verBadge + '</td>';
       html += '<td><button class="btn btn-revoke" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/revoke&apos;,refresh)">Revoke</button>';
       if (c.webhook_url) html += ' <button class="btn" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/clear-webhook&apos;,refresh)">Clear Webhook</button>';
       html += '</td></tr>';
@@ -3223,7 +3249,7 @@ function getInstallURLs(): string[] {
 
 // GET /admin/data — admin auth required
 app.get("/admin/data", requireAdmin, async (c) => {
-  const CLIENT_COLS = "id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url";
+  const CLIENT_COLS = "id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url, last_known_version";
   const pending = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'pending' ORDER BY registered_at DESC`).all();
   const active = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'active' ORDER BY last_seen DESC`).all();
   const revoked = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'revoked'`).all();

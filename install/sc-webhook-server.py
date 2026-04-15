@@ -29,6 +29,31 @@ TOKEN = config.get('TOKEN', '')
 FILES_DIR = os.path.join(PROJECT_DIR, '.sidechat', 'files')
 os.makedirs(FILES_DIR, exist_ok=True)
 
+VERSION_FILE = os.path.join(SCRIPT_DIR, 'sc-version.txt')
+UPDATE_FLAG = os.path.join(SCRIPT_DIR, 'update-available')
+
+
+def check_version():
+    """Compare server's current build SHA to ours. Touch update-available flag if behind."""
+    if not SERVER_URL:
+        return
+    try:
+        with open(VERSION_FILE) as f:
+            local = f.read().strip()
+    except Exception:
+        return
+    try:
+        with urllib.request.urlopen(f'{SERVER_URL}/install/version', timeout=5) as r:
+            remote = r.read().decode().strip()
+    except Exception:
+        return
+    if local and remote and local != remote:
+        try:
+            with open(UPDATE_FLAG, 'w') as f:
+                f.write(f'local={local}\nremote={remote}\n')
+        except Exception:
+            pass
+
 
 def ack_read(msg_id):
     """Send read receipt back to server in background."""
@@ -110,6 +135,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ids_path = os.path.join(PROJECT_DIR, '.sidechat', 'new-mention-ids.txt')
                 with open(ids_path, 'a') as f:
                     f.write(f'{msg_id}\n')
+
+            # Quietly check whether the server has rolled past our installed version.
+            threading.Thread(target=check_version, daemon=True).start()
 
             try:
                 subprocess.run(
