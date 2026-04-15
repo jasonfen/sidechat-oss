@@ -556,6 +556,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     min-width: 36px;
   }
   #sidebar.collapsed #calendar,
+  #sidebar.collapsed #files-panel,
   #sidebar.collapsed #sidebar-label { display: none; }
   #sidebar-header {
     padding: 0 14px;
@@ -653,6 +654,60 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   .cal-day.active {
     background: #0d419d;
     color: #fff;
+  }
+  #files-panel {
+    border-top: 1px solid #21262d;
+    max-height: 40vh;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  #files-header {
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #484f58;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
+  }
+  #files-list {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .file-row {
+    padding: 6px 12px;
+    border-bottom: 1px solid #161b22;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .file-row:hover { background: #161b22; }
+  .file-row .fn {
+    color: #58a6ff;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-row .meta {
+    color: #6e7681;
+    font-size: 10px;
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+  }
+  .file-row .meta-line2 {
+    color: #484f58;
+    font-size: 10px;
+    margin-top: 1px;
+  }
+  #files-list .empty {
+    padding: 12px 14px;
+    color: #484f58;
+    font-size: 11px;
+    font-style: italic;
   }
   #main {
     flex: 1;
@@ -973,6 +1028,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       <div id="cal-dow"></div>
       <div id="cal-grid"></div>
     </div>
+    <div id="files-panel">
+      <div id="files-header">Files</div>
+      <div id="files-list"></div>
+    </div>
   </div>
   <div id="main">
     <div id="header">
@@ -1170,6 +1229,66 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       })
       .catch(function(){ renderCalendar(); });
   })();
+
+  // Files panel
+  var filesListEl = document.getElementById('files-list');
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+    return (n/1073741824).toFixed(2) + ' GB';
+  }
+  function fmtDateTime(iso) {
+    var d = new Date(iso);
+    var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+  }
+  function renderFilesPanel(files) {
+    filesListEl.innerHTML = '';
+    if (!files || files.length === 0) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No files yet';
+      filesListEl.appendChild(e);
+      return;
+    }
+    files.forEach(function(f) {
+      var row = document.createElement('div');
+      row.className = 'file-row';
+      row.title = f.filename + ' — click to jump to message';
+      row.setAttribute('data-msg-id', f.message_id);
+      var fn = document.createElement('div');
+      fn.className = 'fn';
+      fn.textContent = f.filename;
+      var meta = document.createElement('div');
+      meta.className = 'meta';
+      var left = document.createElement('span');
+      left.textContent = f.uploader;
+      var right = document.createElement('span');
+      right.textContent = fmtSize(f.size);
+      meta.appendChild(left); meta.appendChild(right);
+      var line2 = document.createElement('div');
+      line2.className = 'meta-line2';
+      var sentTo = (f.mentions && f.mentions.length) ? '\u2192 ' + f.mentions.join(', ') : '\u2192 everyone';
+      line2.textContent = fmtDateTime(f.uploaded_at) + '  ' + sentTo;
+      row.appendChild(fn);
+      row.appendChild(meta);
+      row.appendChild(line2);
+      row.addEventListener('click', function() {
+        var target = document.querySelector('[data-msg-id="' + this.getAttribute('data-msg-id') + '"].msg');
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      filesListEl.appendChild(row);
+    });
+  }
+  function refreshFiles() {
+    fetch('/files-list?token=' + encodeURIComponent(SC_TOKEN))
+      .then(function(r){ return r.json(); })
+      .then(function(d){ renderFilesPanel(d.files || []); })
+      .catch(function(){});
+  }
+  window.__refreshFiles = refreshFiles;
+  refreshFiles();
   var acIndex = -1;
 
   // Color palette for dynamic sender colors
@@ -1568,6 +1687,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
         var msg = JSON.parse(e.data);
         renderMessage(msg);
         notifyMention(msg);
+        if (msg.files && msg.files.length && window.__refreshFiles) window.__refreshFiles();
       } catch(err) {}
     });
 
@@ -3263,6 +3383,28 @@ app.get("/messages", requireSessionOrObserver, (c) => {
 // GET /messages/all — session or observer auth required
 app.get("/messages/all", requireSessionOrObserver, (c) => {
   return c.json({ messages: withReceipts(messages), count: messages.length });
+});
+
+// GET /files-list — enriched file listing for the sidebar files panel
+app.get("/files-list", requireSessionOrObserver, (c) => {
+  const rows = db.query(
+    "SELECT id, filename, size, mime_type, uploader, message_id, uploaded_at FROM files WHERE message_id IS NOT NULL ORDER BY uploaded_at DESC LIMIT 500"
+  ).all() as any[];
+  const msgById = new Map(messages.map(m => [m.id, m]));
+  const files = rows.map(r => {
+    const m = msgById.get(r.message_id);
+    return {
+      id: r.id,
+      filename: r.filename,
+      size: r.size,
+      mime_type: r.mime_type,
+      uploader: r.uploader,
+      message_id: r.message_id,
+      uploaded_at: r.uploaded_at,
+      mentions: m?.mentions ?? [],
+    };
+  });
+  return c.json({ files });
 });
 
 // GET /dates — per-day message counts for the calendar sidebar
