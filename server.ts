@@ -571,7 +571,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>SideChat</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -1979,7 +1979,7 @@ const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SideChat — Login</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -2317,7 +2317,7 @@ app.get("/health", (c) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SideChat — Health</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -2806,7 +2806,7 @@ app.get("/admin/login", (c) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SideChat — Admin Login</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -2882,7 +2882,7 @@ app.get("/admin", requireAdmin, (c) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SideChat — Admin</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -3168,6 +3168,7 @@ app.get("/admin", requireAdmin, (c) => {
   setInterval(refresh, 10000);
 })();
 </script>
+<div id="og-mascot" title="The original SidChat mascot — never forgotten" style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:default;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
 </body>
 </html>`);
 });
