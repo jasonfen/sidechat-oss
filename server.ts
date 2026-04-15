@@ -764,6 +764,47 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   #md-overlay-body a { color: #58a6ff; }
   #md-overlay-body table { border-collapse: collapse; margin: 8px 0; }
   #md-overlay-body th, #md-overlay-body td { border: 1px solid #30363d; padding: 4px 10px; }
+  #sidebar-mobile-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: #c9d1d9;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+  }
+  #sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(1,4,9,0.6);
+    z-index: 400;
+  }
+  #sidebar-backdrop.open { display: block; }
+  @media (max-width: 700px) {
+    body { font-size: 13px; }
+    #sidebar-mobile-toggle { display: block; }
+    #sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 500;
+      transform: translateX(-105%);
+      transition: transform 0.2s ease;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.4);
+    }
+    #sidebar.mobile-open { transform: translateX(0); }
+    #main { width: 100vw; min-width: 0; }
+    #header { padding: 0 10px; }
+    #header h1 { font-size: 15px; }
+    #messages { padding: 8px 10px; }
+    #input-bar { padding: 6px 8px; }
+    .msg { font-size: 13px; }
+    #files-panel { max-height: 35vh; }
+    #md-overlay { padding: 2vh 2vw; }
+    #md-overlay-body { padding: 12px 14px; font-size: 14px; }
+  }
   #main {
     flex: 1;
     display: flex;
@@ -1067,6 +1108,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 </style>
 </head>
 <body>
+<div id="sidebar-backdrop"></div>
 <div id="app" style="display:flex;flex-direction:row;height:100vh;">
   <div id="sidebar">
     <div id="sidebar-header">
@@ -1090,7 +1132,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   </div>
   <div id="main">
     <div id="header">
-      <h1>SideChat</h1>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="sidebar-mobile-toggle" title="Menu" aria-label="Toggle sidebar">&#x2630;</button>
+        <h1>SideChat</h1>
+      </div>
       <div style="display:flex;align-items:center;gap:12px;">
         <div id="status"><span class="dot disconnected" id="dot"></span><span id="status-text">Connecting...</span></div>
         <div id="mention-bell" title="Unread mentions" style="display:none;cursor:pointer;position:relative;font-size:18px;">
@@ -1835,6 +1880,26 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   sidebarToggle.addEventListener('click', function() {
     sidebar.classList.toggle('collapsed');
     sidebarToggle.innerHTML = sidebar.classList.contains('collapsed') ? '&raquo;' : '&laquo;';
+  });
+  var sidebarMobileToggle = document.getElementById('sidebar-mobile-toggle');
+  var sidebarBackdrop = document.getElementById('sidebar-backdrop');
+  function closeMobileSidebar() {
+    sidebar.classList.remove('mobile-open');
+    sidebarBackdrop.classList.remove('open');
+  }
+  sidebarMobileToggle.addEventListener('click', function() {
+    var opening = !sidebar.classList.contains('mobile-open');
+    sidebar.classList.toggle('mobile-open', opening);
+    sidebarBackdrop.classList.toggle('open', opening);
+  });
+  sidebarBackdrop.addEventListener('click', closeMobileSidebar);
+  // Close sidebar after clicking a calendar day or file row on mobile
+  document.addEventListener('click', function(e) {
+    if (window.innerWidth > 700) return;
+    var t = e.target;
+    if (t.closest && (t.closest('.cal-day.has-activity') || t.closest('.file-row'))) {
+      setTimeout(closeMobileSidebar, 150);
+    }
   });
 
   document.getElementById('signout-btn').addEventListener('click', function() {
