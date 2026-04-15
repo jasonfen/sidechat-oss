@@ -97,18 +97,24 @@ if SERVER_VER=$(curl -fsSL "$SERVER_URL/install/version" 2>/dev/null); then
   rm -f "$SCRIPT_DIR/update-available"
 fi
 
-# Restart the webhook listener so the new sc-webhook-server.py takes effect.
-# The python process is long-lived; updating the file on disk is not enough.
-if pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
-  echo "Restarting webhook listener..."
-  pkill -f sc-webhook-server.py 2>/dev/null || true
-  sleep 1
-  rm -f "$SCRIPT_DIR/.webhook-listener.pid"
-  "$SCRIPT_DIR/sc-webhook-listener.sh" >/dev/null 2>&1 || true
-fi
-# Legacy systemd path for hosts running the older systemd-managed listener
-if systemctl is-active sidechat-webhook.service &>/dev/null; then
-  sudo systemctl restart sidechat-webhook.service 2>/dev/null || true
+# Re-auth + restart in one step if we already have a token. sc-auth.sh handles
+# the listener restart itself (so the new code AND new token take effect on a
+# single bounce). For never-authed clients, restart the listener directly so
+# they don't lose the new sc-webhook-server.py code.
+if [[ -n "${TOKEN:-}" ]] && [[ -x "$SCRIPT_DIR/sc-auth.sh" ]]; then
+  echo "Re-authenticating to publish version + restart listener..."
+  "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1 && echo "  done" || echo "  sc-auth failed (run manually)"
+else
+  if pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
+    echo "Restarting webhook listener..."
+    pkill -f sc-webhook-server.py 2>/dev/null || true
+    sleep 1
+    rm -f "$SCRIPT_DIR/.webhook-listener.pid"
+    "$SCRIPT_DIR/sc-webhook-listener.sh" >/dev/null 2>&1 || true
+  fi
+  if systemctl is-active sidechat-webhook.service &>/dev/null; then
+    sudo systemctl restart sidechat-webhook.service 2>/dev/null || true
+  fi
 fi
 
 echo ""

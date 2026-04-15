@@ -64,8 +64,14 @@ fi
 
 echo "Authenticated. Token stored in $CONFIG"
 
-# Restart webhook listener to pick up new token (if managed by systemd)
-if systemctl is-active sidechat-webhook.service &>/dev/null; then
+# Restart the webhook listener so it picks up the new token (the python process
+# reads config at startup). Userspace path first; fall back to systemd unit.
+if pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
+  pkill -f sc-webhook-server.py 2>/dev/null || true
+  sleep 1
+  rm -f "$SCRIPT_DIR_LOCAL/.webhook-listener.pid"
+  "$SCRIPT_DIR_LOCAL/sc-webhook-listener.sh" >/dev/null 2>&1 || true
+elif systemctl is-active sidechat-webhook.service &>/dev/null; then
   sudo systemctl restart sidechat-webhook.service 2>/dev/null && \
     echo "Restarted sidechat-webhook.service with new token" || true
 fi
