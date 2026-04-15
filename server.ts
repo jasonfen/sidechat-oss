@@ -86,9 +86,16 @@ try { db.exec("ALTER TABLE clients ADD COLUMN webhook_secret TEXT"); } catch {}
 try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN last_known_version TEXT"); } catch {}
 
-// --- Build version (stamped at image build via --build-arg BUILD_SHA) ---
-let SERVER_VERSION = "unknown";
-try { SERVER_VERSION = (await Bun.file(`${import.meta.dir}/version.txt`).text()).trim() || "unknown"; } catch {}
+// --- Build version ---
+// SERVER_VERSION = human-readable semver from package.json (e.g. "2.1.0").
+//   Bump in package.json on each release. This is what shows in the admin UI.
+// SERVER_SHA = build-stamped git short SHA (via Dockerfile ARG BUILD_SHA).
+//   Shown as tooltip in admin UI, useful for pinpointing exact builds between
+//   version bumps. Falls back to "unknown" if not built with --build-arg.
+let SERVER_VERSION = "0.0.0";
+let SERVER_SHA = "unknown";
+try { SERVER_VERSION = (JSON.parse(await Bun.file(`${import.meta.dir}/package.json`).text()).version || "0.0.0").trim(); } catch {}
+try { SERVER_SHA = (await Bun.file(`${import.meta.dir}/version.txt`).text()).trim() || "unknown"; } catch {}
 
 // --- Config from env ---
 
@@ -2274,12 +2281,14 @@ app.get("/metrics", (c) => {
 });
 
 // GET /health — no auth
-// GET /version — current build SHA, no auth, machine-readable
+// GET /version — current release version + build SHA, no auth, machine-readable
 app.get("/version", (c) => {
-  return c.json({ sha: SERVER_VERSION });
+  return c.json({ version: SERVER_VERSION, sha: SERVER_SHA });
 });
 
-// GET /install/version — same value as text/plain so sc-update.sh can curl it
+// GET /install/version — version string as text/plain so sc-update.sh can curl
+// it and compare against installed sc-version.txt. Bots send this in the
+// X-SideChat-Client-Version header on /auth/token to populate the admin badge.
 app.get("/install/version", (c) => {
   return c.text(SERVER_VERSION + "\n");
 });
@@ -2976,6 +2985,7 @@ app.get("/admin", requireAdmin, (c) => {
 <script>
 (function() {
   var SERVER_VERSION_FOR_UI = '${SERVER_VERSION}';
+  var SERVER_SHA_FOR_UI = '${SERVER_SHA}';
   function relTime(iso) {
     if (!iso) return '<span class="dim">never</span>';
     var d = new Date(iso);
@@ -3022,7 +3032,8 @@ app.get("/admin", requireAdmin, (c) => {
       var verBadge = '';
       if (ver) {
         var match = SERVER_VERSION_FOR_UI && ver === SERVER_VERSION_FOR_UI;
-        verBadge = '<span title="' + esc(ver) + '" style="color:' + (match ? '#3fb950' : '#f85149') + ';font-family:monospace;font-size:11px;">' + (match ? '\u25cf ' : '\u25cb ') + esc(ver.slice(0, 7)) + '</span>';
+        var tip = 'client: ' + ver + ' / server: ' + SERVER_VERSION_FOR_UI + ' (' + SERVER_SHA_FOR_UI + ')';
+        verBadge = '<span title="' + esc(tip) + '" style="color:' + (match ? '#3fb950' : '#f85149') + ';font-size:11px;">' + (match ? '\u25cf ' : '\u25cb ') + esc(ver) + '</span>';
       } else {
         verBadge = '<span style="color:#484f58;font-style:italic;font-size:11px;">unknown</span>';
       }
