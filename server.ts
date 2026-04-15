@@ -612,7 +612,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     padding: 0 6px;
     line-height: 1;
   }
-  #cal-today { font-size: 9px; color: #484f58; }
+  #cal-today { font-size: 14px; color: #484f58; }
   #cal-prev:hover, #cal-next:hover, #cal-today:hover { color: #58a6ff; }
   #cal-dow, #cal-grid {
     display: grid;
@@ -967,7 +967,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       <div id="cal-header">
         <button id="cal-prev" title="Previous month">&lsaquo;</button>
         <span id="cal-title"></span>
-        <button id="cal-today" title="Jump to today">&#x25CF;</button>
+        <button id="cal-today" title="Jump to today">&#x2302;</button>
         <button id="cal-next" title="Next month">&rsaquo;</button>
       </div>
       <div id="cal-dow"></div>
