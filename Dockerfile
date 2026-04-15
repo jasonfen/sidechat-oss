@@ -20,6 +20,7 @@ RUN apk add --no-cache bash curl bind-tools iputils libcap \
 
 COPY --chown=bun:bun --from=deps /app/node_modules ./node_modules
 COPY --chown=bun:bun package.json server.ts ./
+COPY --chown=bun:bun static ./static
 COPY --chown=bun:bun install ./install
 COPY --chown=bun:bun docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh

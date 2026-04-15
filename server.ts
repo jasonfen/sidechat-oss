@@ -702,6 +702,91 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     color: #484f58;
     font-size: 11px;
   }
+  .md-preview {
+    margin-top: 6px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    background: #161b22;
+    overflow: hidden;
+  }
+  .md-preview > summary {
+    list-style: none;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #58a6ff;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .md-preview > summary::-webkit-details-marker { display: none; }
+  .md-preview > summary::before {
+    content: "\\25B6";
+    display: inline-block;
+    font-size: 9px;
+    color: #8b949e;
+    margin-right: 4px;
+    transition: transform 0.15s;
+  }
+  .md-preview[open] > summary::before { transform: rotate(90deg); }
+  .md-preview > summary:hover { background: #21262d; }
+  .md-preview .md-preview-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .md-preview .md-preview-size { color: #484f58; font-size: 11px; }
+  .md-preview .md-preview-download { color: #8b949e; font-size: 11px; text-decoration: none; }
+  .md-preview .md-preview-download:hover { color: #58a6ff; }
+  .md-preview-body {
+    padding: 10px 14px;
+    border-top: 1px solid #21262d;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #c9d1d9;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .md-preview-body h1, .md-preview-body h2, .md-preview-body h3,
+  .md-preview-body h4, .md-preview-body h5, .md-preview-body h6 {
+    margin: 12px 0 6px;
+    line-height: 1.25;
+    color: #f0f6fc;
+  }
+  .md-preview-body h1 { font-size: 18px; border-bottom: 1px solid #30363d; padding-bottom: 4px; }
+  .md-preview-body h2 { font-size: 16px; border-bottom: 1px solid #30363d; padding-bottom: 3px; }
+  .md-preview-body h3 { font-size: 14px; }
+  .md-preview-body p { margin: 6px 0; }
+  .md-preview-body ul, .md-preview-body ol { margin: 6px 0; padding-left: 24px; }
+  .md-preview-body li { margin: 2px 0; }
+  .md-preview-body code {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .md-preview-body pre {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .md-preview-body pre code { background: transparent; border: 0; padding: 0; font-size: 12px; }
+  .md-preview-body blockquote {
+    border-left: 3px solid #30363d;
+    margin: 6px 0;
+    padding: 0 10px;
+    color: #8b949e;
+  }
+  .md-preview-body a { color: #58a6ff; }
+  .md-preview-body table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+  .md-preview-body th, .md-preview-body td { border: 1px solid #30363d; padding: 4px 8px; }
+  .md-preview-body th { background: #161b22; }
+  .md-preview-body hr { border: 0; border-top: 1px solid #30363d; margin: 12px 0; }
+  .md-preview-body img { max-width: 100%; height: auto; }
+  .md-preview-error { color: #f85149; font-size: 12px; padding: 8px 14px; }
   #pending-files {
     display: none;
     padding: 4px 16px 0;
@@ -859,6 +944,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     </div>
   </div>
 </div>
+<script src="/static/marked.min.js"></script>
+<script src="/static/dompurify.min.js"></script>
 <script>
 (function() {
   var SC_USER = '${username}';
@@ -1013,6 +1100,53 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     });
   }, { threshold: 0.5 });
 
+  // Markdown attachment preview: fetch + render on first expand, sanitize with
+  // DOMPurify, cap fetch at 200KB so a huge .md can't wedge the viewer.
+  var MD_PREVIEW_CAP_BYTES = 200 * 1024;
+  function attachMdPreview(details) {
+    var loaded = false;
+    details.addEventListener('toggle', function() {
+      if (!details.open || loaded) return;
+      loaded = true;
+      var body = details.querySelector('.md-preview-body');
+      var fileId = details.getAttribute('data-file-id');
+      var declaredSize = parseInt(details.getAttribute('data-file-size') || '0', 10);
+      if (declaredSize > MD_PREVIEW_CAP_BYTES) {
+        body.innerHTML = '<div class="md-preview-error">File too large for preview (' +
+          (declaredSize / 1024).toFixed(0) + ' KB &gt; ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB). Use the download link.</div>';
+        return;
+      }
+      if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+        body.innerHTML = '<div class="md-preview-error">Markdown renderer not available.</div>';
+        return;
+      }
+      fetch('/files/' + fileId + '/download', { credentials: 'same-origin' })
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(function(blob) {
+          if (blob.size > MD_PREVIEW_CAP_BYTES) {
+            throw new Error('File exceeds ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB cap');
+          }
+          return blob.text();
+        })
+        .then(function(text) {
+          var rendered;
+          try { rendered = marked.parse(text, { breaks: true, gfm: true }); }
+          catch (e) { rendered = '<pre>' + escapeHtml(text) + '</pre>'; }
+          body.innerHTML = DOMPurify.sanitize(rendered, {
+            FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+            FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick'],
+            ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
+          });
+        })
+        .catch(function(err) {
+          body.innerHTML = '<div class="md-preview-error">Failed to load preview: ' + escapeHtml(String(err.message || err)) + '</div>';
+        });
+    });
+  }
+
   function renderMessage(msg) {
     if (seen.has(msg.id)) return;
     seen.add(msg.id);
@@ -1062,8 +1196,20 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
         var sizeStr = f.size < 1024 ? f.size + ' B'
           : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB'
           : (f.size / 1048576).toFixed(1) + ' MB';
-        filesHtml += '<a class="file-badge" href="/files/' + encodeURIComponent(f.id) + '/download" target="_blank">' +
-          '&#x1F4CE; ' + escapeHtml(f.filename) + ' <span class="file-size">(' + sizeStr + ')</span></a>';
+        var lower = (f.filename || '').toLowerCase();
+        var isMd = lower.endsWith('.md') || lower.endsWith('.markdown');
+        if (isMd) {
+          filesHtml += '<details class="md-preview" data-file-id="' + encodeURIComponent(f.id) + '" data-file-size="' + f.size + '">' +
+            '<summary>' +
+              '<span class="md-preview-label">&#x1F4DD; ' + escapeHtml(f.filename) + ' <span class="md-preview-size">(' + sizeStr + ')</span></span>' +
+              '<a class="md-preview-download" href="/files/' + encodeURIComponent(f.id) + '/download" target="_blank" rel="noopener">download</a>' +
+            '</summary>' +
+            '<div class="md-preview-body" data-loaded="0">Loading\\u2026</div>' +
+          '</details>';
+        } else {
+          filesHtml += '<a class="file-badge" href="/files/' + encodeURIComponent(f.id) + '/download" target="_blank">' +
+            '&#x1F4CE; ' + escapeHtml(f.filename) + ' <span class="file-size">(' + sizeStr + ')</span></a>';
+        }
       });
       filesHtml += '</div>';
     }
@@ -1072,6 +1218,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       filesHtml +
       '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
+    var mdPreviews = div.querySelectorAll('details.md-preview');
+    for (var i = 0; i < mdPreviews.length; i++) attachMdPreview(mdPreviews[i]);
     messagesEl.appendChild(div);
     readObserver.observe(div);
     if (!documentVisible || userScrolled) addUnreadMention(msg);
@@ -2699,6 +2847,30 @@ app.get("/users", requireSessionOrObserver, (c) => {
   const botNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name);
   const observerNames = (db.query("SELECT username FROM observers WHERE status = 'active'").all() as any[]).map(r => r.username);
   return c.json({ users: [...botNames, ...observerNames, ADMIN_USER] });
+});
+
+// --- Static assets (vendored JS libraries served from /static/) ---
+
+// Allowlist of vendored static files. Prevents path traversal and keeps the
+// attack surface tiny — any unknown filename 404s immediately.
+const STATIC_ASSETS: Record<string, string> = {
+  "marked.min.js": "application/javascript; charset=utf-8",
+  "dompurify.min.js": "application/javascript; charset=utf-8",
+};
+
+app.get("/static/:filename", async (c) => {
+  const filename = c.req.param("filename");
+  const mime = STATIC_ASSETS[filename];
+  if (!mime) return c.json({ error: "Not found" }, 404);
+  const file = Bun.file(`${import.meta.dir}/static/${filename}`);
+  if (!(await file.exists())) return c.json({ error: "Not found" }, 404);
+  return new Response(file, {
+    headers: {
+      "Content-Type": mime,
+      "Cache-Control": "public, max-age=86400",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 });
 
 // --- File Transfer ---
