@@ -541,8 +541,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     flex-direction: row;
   }
   #sidebar {
-    width: 180px;
-    min-width: 180px;
+    width: 220px;
+    min-width: 220px;
     background: #010409;
     border-right: 1px solid #21262d;
     display: flex;
@@ -555,7 +555,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     width: 36px;
     min-width: 36px;
   }
-  #sidebar.collapsed #date-list,
+  #sidebar.collapsed #calendar,
   #sidebar.collapsed #sidebar-label { display: none; }
   #sidebar-header {
     padding: 0 14px;
@@ -585,28 +585,73 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     line-height: 1;
   }
   #sidebar-toggle:hover { color: #c9d1d9; }
-  #date-list {
+  #calendar {
     flex: 1;
     overflow-y: auto;
-    padding: 6px 0;
+    padding: 10px 12px;
+    user-select: none;
   }
-  #date-list a {
-    display: block;
-    padding: 5px 14px;
-    color: #8b949e;
-    text-decoration: none;
-    font-size: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  #cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
   }
-  #date-list a:hover {
+  #cal-title {
+    font-size: 12px;
+    font-weight: 600;
     color: #c9d1d9;
-    background: #161b22;
+    letter-spacing: 0.3px;
   }
-  #date-list a.active {
-    color: #58a6ff;
-    background: #0d1117;
+  #cal-prev, #cal-next {
+    background: none;
+    border: none;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 0 6px;
+    line-height: 1;
+  }
+  #cal-prev:hover, #cal-next:hover { color: #c9d1d9; }
+  #cal-dow, #cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  #cal-dow {
+    margin-bottom: 4px;
+  }
+  #cal-dow span {
+    text-align: center;
+    font-size: 10px;
+    color: #484f58;
+    text-transform: uppercase;
+    padding: 2px 0;
+  }
+  .cal-day {
+    text-align: center;
+    font-size: 11px;
+    padding: 4px 0;
+    color: #484f58;
+    border-radius: 3px;
+    cursor: default;
+    min-height: 22px;
+    line-height: 14px;
+  }
+  .cal-day.in-month { color: #8b949e; }
+  .cal-day.has-activity {
+    color: #c9d1d9;
+    font-weight: 600;
+    background: #161b22;
+    cursor: pointer;
+  }
+  .cal-day.has-activity:hover { background: #21262d; color: #58a6ff; }
+  .cal-day.today {
+    outline: 1px solid #30363d;
+  }
+  .cal-day.active {
+    background: #0d419d;
+    color: #fff;
   }
   #main {
     flex: 1;
@@ -914,10 +959,18 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 <div id="app" style="display:flex;flex-direction:row;height:100vh;">
   <div id="sidebar">
     <div id="sidebar-header">
-      <span id="sidebar-label">Dates</span>
+      <span id="sidebar-label">Calendar</span>
       <button id="sidebar-toggle" title="Toggle sidebar">&laquo;</button>
     </div>
-    <div id="date-list"></div>
+    <div id="calendar">
+      <div id="cal-header">
+        <button id="cal-prev" title="Previous month">&lsaquo;</button>
+        <span id="cal-title"></span>
+        <button id="cal-next" title="Next month">&rsaquo;</button>
+      </div>
+      <div id="cal-dow"></div>
+      <div id="cal-grid"></div>
+    </div>
   </div>
   <div id="main">
     <div id="header">
@@ -953,7 +1006,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   var SC_TOKEN = '${sessionToken}';
 
   var messagesEl = document.getElementById('messages');
-  var dateListEl = document.getElementById('date-list');
+  var calGridEl = document.getElementById('cal-grid');
+  var calTitleEl = document.getElementById('cal-title');
+  var calDowEl = document.getElementById('cal-dow');
   var dot = document.getElementById('dot');
   var statusText = document.getElementById('status-text');
   var inputBar = document.getElementById('input-bar');
@@ -1023,7 +1078,89 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 
   if (canPost) { inputBar.style.display = 'block'; }
   else { inputBar.style.display = 'none'; }
-  var sidebarDates = new Set();
+  // Calendar state
+  var calActivity = {};      // dateKey -> count
+  var calViewYear, calViewMonth; // currently displayed month (month is 0-indexed)
+  (function initCalDow(){
+    var days = ['S','M','T','W','T','F','S'];
+    for (var i = 0; i < 7; i++) {
+      var s = document.createElement('span');
+      s.textContent = days[i];
+      calDowEl.appendChild(s);
+    }
+  })();
+  function padCal(n){ return n < 10 ? '0'+n : ''+n; }
+  function todayKey(){ var t = new Date(); return t.getFullYear()+'-'+padCal(t.getMonth()+1)+'-'+padCal(t.getDate()); }
+  function renderCalendar(){
+    calGridEl.innerHTML = '';
+    var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    calTitleEl.textContent = monthNames[calViewMonth] + ' ' + calViewYear;
+    var firstDow = new Date(calViewYear, calViewMonth, 1).getDay();
+    var daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+    var prevMonthDays = new Date(calViewYear, calViewMonth, 0).getDate();
+    var today = todayKey();
+    var cells = [];
+    for (var i = 0; i < firstDow; i++) {
+      cells.push({ day: prevMonthDays - firstDow + 1 + i, inMonth: false, key: null });
+    }
+    for (var d = 1; d <= daysInMonth; d++) {
+      var key = calViewYear + '-' + padCal(calViewMonth+1) + '-' + padCal(d);
+      cells.push({ day: d, inMonth: true, key: key });
+    }
+    while (cells.length % 7 !== 0) {
+      cells.push({ day: cells.length - firstDow - daysInMonth + 1, inMonth: false, key: null });
+    }
+    cells.forEach(function(c){
+      var el = document.createElement('div');
+      el.className = 'cal-day';
+      el.textContent = c.day;
+      if (c.inMonth) {
+        el.classList.add('in-month');
+        if (c.key === today) el.classList.add('today');
+        if (calActivity[c.key]) {
+          el.classList.add('has-activity');
+          el.title = calActivity[c.key] + ' messages';
+          el.setAttribute('data-date', c.key);
+          el.addEventListener('click', function(){
+            var target = document.getElementById('date-' + this.getAttribute('data-date'));
+            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            calGridEl.querySelectorAll('.cal-day.active').forEach(function(a){ a.classList.remove('active'); });
+            this.classList.add('active');
+          });
+        }
+      }
+      calGridEl.appendChild(el);
+    });
+  }
+  window.__calMarkDay = function(dateKey){
+    calActivity[dateKey] = (calActivity[dateKey] || 0) + 1;
+    var parts = dateKey.split('-');
+    if (parseInt(parts[0],10) === calViewYear && parseInt(parts[1],10)-1 === calViewMonth) {
+      renderCalendar();
+    }
+  };
+  document.getElementById('cal-prev').addEventListener('click', function(){
+    calViewMonth--;
+    if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; }
+    renderCalendar();
+  });
+  document.getElementById('cal-next').addEventListener('click', function(){
+    calViewMonth++;
+    if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
+    renderCalendar();
+  });
+  (function initCal(){
+    var t = new Date();
+    calViewYear = t.getFullYear();
+    calViewMonth = t.getMonth();
+    fetch('/dates?token=' + encodeURIComponent(SC_TOKEN))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        (data.dates || []).forEach(function(d){ calActivity[d.date] = d.count; });
+        renderCalendar();
+      })
+      .catch(function(){ renderCalendar(); });
+  })();
   var acIndex = -1;
 
   // Color palette for dynamic sender colors
@@ -1153,7 +1290,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     if (seen.has(msg.id)) return;
     seen.add(msg.id);
     var d = new Date(msg.timestamp);
-    var dateKey = d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+    var pad2 = function(n) { return n < 10 ? '0' + n : '' + n; };
+    var dateKey = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
     if (dateKey !== lastRenderedDate) {
       lastRenderedDate = dateKey;
       var divider = document.createElement('div');
@@ -1161,22 +1299,6 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       divider.id = 'date-' + dateKey;
       divider.textContent = formatDateLabel(d);
       messagesEl.appendChild(divider);
-      if (!sidebarDates.has(dateKey)) {
-        sidebarDates.add(dateKey);
-        var link = document.createElement('a');
-        link.href = '#date-' + dateKey;
-        var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
-        link.textContent = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
-        link.setAttribute('data-date', dateKey);
-        link.addEventListener('click', function(e) {
-          e.preventDefault();
-          var target = document.getElementById('date-' + this.getAttribute('data-date'));
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          dateListEl.querySelectorAll('a').forEach(function(a) { a.classList.remove('active'); });
-          this.classList.add('active');
-        });
-        dateListEl.appendChild(link);
-      }
     }
     var div = document.createElement('div');
     div.className = 'msg';
@@ -1452,6 +1574,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
         var data = JSON.parse(e.data);
         updateReceipts(data.id, 'read', data.reader);
       } catch(err) {}
+    });
+
+    es.addEventListener('activity', function(e) {
+      try { var d = JSON.parse(e.data); if (d && d.date && window.__calMarkDay) window.__calMarkDay(d.date); } catch(_) {}
     });
 
     es.addEventListener('ping', function() {});
@@ -3045,6 +3171,9 @@ app.post("/message", requirePostSession, async (c) => {
   messages.push(msg);
   messagesPostedTotal++;
   broadcastEvent("message", msg);
+  const md = new Date(msg.timestamp);
+  const mdKey = `${md.getFullYear()}-${String(md.getMonth()+1).padStart(2,'0')}-${String(md.getDate()).padStart(2,'0')}`;
+  broadcastEvent("activity", { date: mdKey });
   deliverWebhooks(msg);
 
   return c.json({ id: msg.id, timestamp: msg.timestamp }, 201);
@@ -3125,6 +3254,20 @@ app.get("/messages", requireSessionOrObserver, (c) => {
 // GET /messages/all — session or observer auth required
 app.get("/messages/all", requireSessionOrObserver, (c) => {
   return c.json({ messages: withReceipts(messages), count: messages.length });
+});
+
+// GET /dates — per-day message counts for the calendar sidebar
+app.get("/dates", requireSessionOrObserver, (c) => {
+  const counts: Record<string, number> = {};
+  for (const m of messages) {
+    const d = new Date(m.timestamp);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  const dates = Object.entries(counts)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return c.json({ dates });
 });
 
 // GET /events — SSE, session or observer auth required
