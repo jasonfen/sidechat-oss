@@ -273,6 +273,28 @@ function getClientIP(c: Context): string {
   return c.req.header("x-forwarded-for") ?? "unknown";
 }
 
+// --- Structured audit log ---
+// One JSON line per security/activity event to stdout. `docker logs sidechat`
+// is the canonical audit surface; downstream aggregation (Loki, Splunk,
+// whatever) is the consumer's choice. Spec: docs/PLAN-logging-2026-04-15.md.
+const LOG_VERBOSE = (Bun.env.LOG_VERBOSE ?? "") === "1";
+
+function logEvent(event: string, fields: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
+}
+
+function adminSessionIdShort(token: string | undefined | null): string | undefined {
+  return token ? token.slice(0, 6) : undefined;
+}
+
+async function hashUrlHostShort(url: string): Promise<string> {
+  try {
+    const host = new URL(url).host;
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(host));
+    return Array.from(new Uint8Array(buf)).slice(0, 4).map(b => b.toString(16).padStart(2, "0")).join("");
+  } catch { return "invalid_url"; }
+}
+
 // --- Auth rate limiting ---
 // Per-IP counter for failed auth attempts. Blocks brute force of weak
 // observer passwords and nonce flooding against /auth/challenge. Counts
@@ -371,7 +393,7 @@ function parseMentions(content: string): string[] {
 async function deliverWebhooks(msg: Message) {
   if (msg.mentions.length === 0) return;
   const clients = db.query(
-    "SELECT name, webhook_url, webhook_secret FROM clients WHERE status = 'active' AND webhook_url IS NOT NULL"
+    "SELECT name, fingerprint, webhook_url, webhook_secret FROM clients WHERE status = 'active' AND webhook_url IS NOT NULL"
   ).all() as any[];
   for (const client of clients) {
     if (!msg.mentions.includes(client.name)) continue;
@@ -405,8 +427,12 @@ async function deliverWebhooks(msg: Message) {
         webhookDeliveriesTotal++;
       } else {
         webhookDeliveriesFailedTotal++;
+        logEvent("webhook.delivery.fail", { fingerprint: client.fingerprint ?? null, username: client.name, http_status: res.status });
       }
-    }).catch(() => { webhookDeliveriesFailedTotal++; });
+    }).catch((err) => {
+      webhookDeliveriesFailedTotal++;
+      logEvent("webhook.delivery.fail", { fingerprint: client.fingerprint ?? null, username: client.name, http_status: 0, reason: String(err?.name ?? "fetch_error") });
+    });
   }
 }
 
@@ -2089,7 +2115,8 @@ app.get("/watch/login", (c) => {
 // POST /watch/login — observer authentication
 app.post("/watch/login", async (c) => {
   const limited = checkAuthRateLimit(c);
-  if (limited) return limited;
+  if (limited) { logEvent("observer.login.fail", { username_attempted: "unknown", ip: getClientIP(c), reason: "rate_limit" }); return limited; }
+  const ip = getClientIP(c);
   const body = await c.req.json<{ username: string; password: string }>();
 
   const observer = db.query(
@@ -2098,12 +2125,14 @@ app.post("/watch/login", async (c) => {
   if (!observer) {
     authAttemptsFailedTotal++;
     recordAuthFailure(c);
+    logEvent("observer.login.fail", { username_attempted: body.username, ip, reason: "no_such_user" });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
   if (observer.status === "revoked") {
     authAttemptsFailedTotal++;
     recordAuthFailure(c);
+    logEvent("observer.login.fail", { username_attempted: body.username, ip, reason: "revoked" });
     return c.json({ error: "Account has been revoked" }, 403);
   }
 
@@ -2111,11 +2140,13 @@ app.post("/watch/login", async (c) => {
   if (!valid) {
     authAttemptsFailedTotal++;
     recordAuthFailure(c);
+    logEvent("observer.login.fail", { username_attempted: body.username, ip, reason: "bad_password" });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
 
   authAttemptsTotal++;
+  logEvent("observer.login.ok", { username: observer.username, ip });
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   db.run(
@@ -2136,8 +2167,10 @@ app.post("/watch/login", async (c) => {
 // POST /watch/logout — observer logout
 app.post("/watch/logout", requireObserver, async (c) => {
   const token = getCookie(c, "observer_session");
+  const observer = c.get("observer") as any;
   if (token) db.run("DELETE FROM observer_sessions WHERE token = ?", [token]);
   deleteCookie(c, "observer_session", { path: "/" });
+  logEvent("observer.logout", { username: observer?.username, ip: getClientIP(c) });
   return c.redirect("/watch/login");
 });
 
@@ -2589,7 +2622,11 @@ async function requireAdmin(c: Context, next: Next) {
   const session = db.query(
     "SELECT * FROM admin_sessions WHERE token = ? AND expires_at > ?"
   ).get(token, new Date().toISOString()) as any;
-  if (!session) return c.redirect("/admin/login");
+  if (!session) {
+    logEvent("admin.session.expired", { ip: getClientIP(c), admin_session_id: adminSessionIdShort(token) });
+    return c.redirect("/admin/login");
+  }
+  c.set("admin_session_token", token);
   await next();
 }
 
@@ -2637,6 +2674,7 @@ app.post("/register", async (c) => {
     [body.name, body.public_key, fingerprint, getClientIP(c), new Date().toISOString()]
   );
 
+  logEvent("client.pending", { fingerprint, username: body.name, ip: getClientIP(c) });
   return c.json({
     status: "pending",
     fingerprint,
@@ -2650,6 +2688,7 @@ app.post("/register", async (c) => {
 app.get("/auth/challenge", (c) => {
   const limited = checkAuthRateLimit(c);
   if (limited) return limited;
+  const ip = getClientIP(c);
   const fingerprint = c.req.query("fingerprint");
   if (!fingerprint) { recordAuthFailure(c); return c.json({ error: "Missing fingerprint" }, 400); }
 
@@ -2657,6 +2696,7 @@ app.get("/auth/challenge", (c) => {
   if (!client) { recordAuthFailure(c); return c.json({ error: "Client not found" }, 404); }
   if (client.status !== "active") { recordAuthFailure(c); return c.json({ error: "Client not approved" }, 403); }
 
+  logEvent("auth.challenge.requested", { fingerprint, ip });
   const nonce = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const expiresAt = new Date(Date.now() + NONCE_TTL_SECONDS * 1000).toISOString();
 
@@ -2671,21 +2711,22 @@ app.get("/auth/challenge", (c) => {
 // POST /auth/token — no auth required
 app.post("/auth/token", async (c) => {
   const limited = checkAuthRateLimit(c);
-  if (limited) return limited;
+  if (limited) { logEvent("auth.token.denied", { fingerprint: "unknown", ip: getClientIP(c), reason: "rate_limit" }); return limited; }
+  const ip = getClientIP(c);
   const body = await c.req.json<{ fingerprint: string; nonce: string; signature: string }>();
 
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
   ).get(body.fingerprint) as any;
-  if (!client) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Client not approved" }, 403); }
+  if (!client) { authAttemptsFailedTotal++; recordAuthFailure(c); logEvent("auth.token.denied", { fingerprint: body.fingerprint, ip, reason: "not_approved" }); return c.json({ error: "Client not approved" }, 403); }
 
   const nonce = db.query(
     "SELECT * FROM nonces WHERE value = ? AND fingerprint = ? AND used = 0 AND expires_at > ?"
   ).get(body.nonce, body.fingerprint, new Date().toISOString()) as any;
-  if (!nonce) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Invalid or expired nonce" }, 401); }
+  if (!nonce) { authAttemptsFailedTotal++; recordAuthFailure(c); logEvent("auth.token.denied", { fingerprint: body.fingerprint, ip, reason: "bad_nonce" }); return c.json({ error: "Invalid or expired nonce" }, 401); }
 
   const valid = await verifySignature(client.public_key, body.nonce, body.signature);
-  if (!valid) { authAttemptsFailedTotal++; recordAuthFailure(c); return c.json({ error: "Signature verification failed" }, 401); }
+  if (!valid) { authAttemptsFailedTotal++; recordAuthFailure(c); logEvent("auth.token.denied", { fingerprint: body.fingerprint, ip, reason: "bad_signature" }); return c.json({ error: "Signature verification failed" }, 401); }
 
   // Mark nonce as used
   db.run("UPDATE nonces SET used = 1 WHERE value = ?", [body.nonce]);
@@ -2704,6 +2745,7 @@ app.post("/auth/token", async (c) => {
     [now.toISOString(), getClientIP(c), body.fingerprint]);
 
   authAttemptsTotal++;
+  logEvent("auth.token.issued", { fingerprint: body.fingerprint, username: client.name, ip });
   return c.json({ token, expires_at: expiresAt.toISOString() });
 });
 
@@ -3076,11 +3118,13 @@ app.get("/admin", requireAdmin, (c) => {
 // POST /admin/login — no auth required
 app.post("/admin/login", async (c) => {
   const limited = checkAuthRateLimit(c);
-  if (limited) return limited;
+  if (limited) { logEvent("admin.login.fail", { ip: getClientIP(c), reason: "rate_limit" }); return limited; }
+  const ip = getClientIP(c);
   const body = await c.req.json<{ username: string; password: string }>();
 
   if (body.username !== ADMIN_USER || !ADMIN_PASSWORD_HASH) {
     recordAuthFailure(c);
+    logEvent("admin.login.fail", { ip, reason: ADMIN_PASSWORD_HASH ? "bad_username" : "no_password_configured" });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
@@ -3088,6 +3132,7 @@ app.post("/admin/login", async (c) => {
   const valid = await Bun.password.verify(body.password, ADMIN_PASSWORD_HASH);
   if (!valid) {
     recordAuthFailure(c);
+    logEvent("admin.login.fail", { ip, reason: "bad_password" });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
@@ -3107,6 +3152,7 @@ app.post("/admin/login", async (c) => {
     path: "/",
   });
 
+  logEvent("admin.login.ok", { ip, admin_session_id: adminSessionIdShort(token) });
   return c.json({ ok: true });
 });
 
@@ -3115,6 +3161,7 @@ app.post("/admin/logout", requireAdmin, async (c) => {
   const token = getCookie(c, "admin_session");
   if (token) db.run("DELETE FROM admin_sessions WHERE token = ?", [token]);
   deleteCookie(c, "admin_session", { path: "/" });
+  logEvent("admin.logout", { ip: getClientIP(c), admin_session_id: adminSessionIdShort(token) });
   return c.redirect("/admin/login");
 });
 
@@ -3180,10 +3227,12 @@ app.get("/admin/data", requireAdmin, async (c) => {
 // POST /admin/clients/:fingerprint/approve
 app.post("/admin/clients/:fingerprint/approve", requireAdmin, async (c) => {
   const fp = c.req.param("fingerprint");
+  const row = db.query("SELECT name FROM clients WHERE fingerprint = ?").get(fp) as any;
   db.run(
     "UPDATE clients SET status = 'active', approved_at = ? WHERE fingerprint = ? AND status = 'pending'",
     [new Date().toISOString(), fp]
   );
+  logEvent("client.approved", { fingerprint: fp, username: row?.name, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   return c.json({ status: "approved" });
 });
 
@@ -3191,14 +3240,17 @@ app.post("/admin/clients/:fingerprint/approve", requireAdmin, async (c) => {
 app.post("/admin/clients/:fingerprint/reject", requireAdmin, async (c) => {
   const fp = c.req.param("fingerprint");
   db.run("DELETE FROM clients WHERE fingerprint = ? AND status = 'pending'", [fp]);
+  logEvent("client.rejected", { fingerprint: fp, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   return c.json({ status: "rejected" });
 });
 
 // POST /admin/clients/:fingerprint/revoke
 app.post("/admin/clients/:fingerprint/revoke", requireAdmin, async (c) => {
   const fp = c.req.param("fingerprint");
+  const row = db.query("SELECT name FROM clients WHERE fingerprint = ?").get(fp) as any;
   db.run("UPDATE clients SET status = 'revoked' WHERE fingerprint = ?", [fp]);
   db.run("DELETE FROM sessions WHERE fingerprint = ?", [fp]);
+  logEvent("client.revoked", { fingerprint: fp, username: row?.name, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   return c.json({ status: "revoked" });
 });
 
@@ -3206,6 +3258,7 @@ app.post("/admin/clients/:fingerprint/revoke", requireAdmin, async (c) => {
 app.post("/admin/clients/:fingerprint/clear-webhook", requireAdmin, async (c) => {
   const fp = c.req.param("fingerprint");
   db.run("UPDATE clients SET webhook_url = NULL, webhook_secret = NULL WHERE fingerprint = ?", [fp]);
+  logEvent("webhook.cleared", { fingerprint: fp, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   return c.json({ status: "webhook_cleared" });
 });
 
@@ -3229,12 +3282,14 @@ app.post("/admin/observers", requireAdmin, async (c) => {
   const passwordHash = await Bun.password.hash(body.password, { algorithm: "bcrypt" });
   const canPost = body.can_post !== false ? 1 : 0;
 
+  const adminSid = adminSessionIdShort(c.get("admin_session_token") as string);
   if (existing) {
     // Re-activate revoked observer with new password
     db.run(
       "UPDATE observers SET password_hash = ?, can_post = ?, status = 'active', last_seen = NULL, last_ip = NULL WHERE id = ?",
       [passwordHash, canPost, existing.id]
     );
+    logEvent("observer.created", { username: body.username, can_post: canPost === 1, reactivated: true, admin_session_id: adminSid });
     return c.json({ id: existing.id, username: body.username, can_post: canPost === 1 }, 201);
   }
 
@@ -3243,6 +3298,7 @@ app.post("/admin/observers", requireAdmin, async (c) => {
     [body.username, passwordHash, canPost, new Date().toISOString()]
   );
 
+  logEvent("observer.created", { username: body.username, can_post: canPost === 1, admin_session_id: adminSid });
   return c.json({ id: Number(result.lastInsertRowid), username: body.username, can_post: canPost === 1 }, 201);
 });
 
@@ -3250,6 +3306,7 @@ app.post("/admin/observers", requireAdmin, async (c) => {
 app.post("/admin/observers/:id/revoke", requireAdmin, async (c) => {
   const id = parseInt(c.req.param("id"), 10);
   db.run("UPDATE observers SET status = 'revoked' WHERE id = ?", [id]);
+  logEvent("observer.revoked", { id, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   db.run("DELETE FROM observer_sessions WHERE observer_id = ?", [id]);
   return c.json({ status: "revoked" });
 });
@@ -3257,18 +3314,22 @@ app.post("/admin/observers/:id/revoke", requireAdmin, async (c) => {
 // POST /admin/settings/files — update file transfer limits
 app.post("/admin/settings/files", requireAdmin, async (c) => {
   const body = await c.req.json<{ max_file_size?: number; max_user_storage?: number; max_total_storage?: number }>();
+  const adminSid = adminSessionIdShort(c.get("admin_session_token") as string);
   const updated: string[] = [];
   if (body.max_file_size != null && body.max_file_size > 0) {
     setSetting("max_file_size", body.max_file_size);
     updated.push("max_file_size");
+    logEvent("settings.updated", { key: "max_file_size", new_value_summary: body.max_file_size, admin_session_id: adminSid });
   }
   if (body.max_user_storage != null && body.max_user_storage > 0) {
     setSetting("max_user_storage", body.max_user_storage);
     updated.push("max_user_storage");
+    logEvent("settings.updated", { key: "max_user_storage", new_value_summary: body.max_user_storage, admin_session_id: adminSid });
   }
   if (body.max_total_storage != null && body.max_total_storage > 0) {
     setSetting("max_total_storage", body.max_total_storage);
     updated.push("max_total_storage");
+    logEvent("settings.updated", { key: "max_total_storage", new_value_summary: body.max_total_storage, admin_session_id: adminSid });
   }
   return c.json({ updated, settings: getFileSettings() });
 });
@@ -3366,6 +3427,7 @@ app.post("/files/upload", requirePostSession, async (c) => {
   );
 
   fileUploadsTotal++;
+  logEvent("file.uploaded", { uploader: sender, size: file.size, mime: mimeType.split("/")[0], id });
   return c.json({ id, filename: file.name, size: file.size, mime_type: mimeType }, 201);
 });
 
@@ -3477,6 +3539,7 @@ app.post("/message", requirePostSession, async (c) => {
   const md = new Date(msg.timestamp);
   const mdKey = `${md.getFullYear()}-${String(md.getMonth()+1).padStart(2,'0')}-${String(md.getDate()).padStart(2,'0')}`;
   broadcastEvent("activity", { date: mdKey });
+  logEvent("message.posted", { sender, length: msg.content.length, has_files: !!msg.files?.length, files_count: msg.files?.length ?? 0, mentions_count: msg.mentions?.length ?? 0 });
   deliverWebhooks(msg);
 
   return c.json({ id: msg.id, timestamp: msg.timestamp }, 201);
@@ -3513,6 +3576,7 @@ app.post("/webhook", requirePostSession, async (c) => {
   const secret = crypto.randomUUID();
   db.query("UPDATE clients SET webhook_url = ?, webhook_secret = ? WHERE fingerprint = ?")
     .run(body.url, secret, client.fingerprint);
+  logEvent("webhook.registered", { fingerprint: client.fingerprint, url_host_hash: await hashUrlHostShort(body.url) });
   return c.json({ url: body.url, secret }, 200);
 });
 
@@ -3605,9 +3669,11 @@ app.get("/events", requireSessionOrObserver, (c) => {
 
   const openCount = sseConnectionsPerSender.get(username) ?? 0;
   if (openCount >= MAX_SSE_CONNECTIONS_PER_SENDER) {
+    logEvent("sse.rejected", { username, reason: "rate_limit" });
     return c.json({ error: "Too many open SSE connections for this user" }, 429);
   }
   sseConnectionsPerSender.set(username, openCount + 1);
+  if (LOG_VERBOSE) logEvent("sse.connected", { username, connection_count: openCount + 1 });
 
   let cleanup: () => void;
   const stream = new ReadableStream({
