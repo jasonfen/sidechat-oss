@@ -709,6 +709,61 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     font-size: 11px;
     font-style: italic;
   }
+  #md-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 4, 9, 0.75);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4vh 3vw;
+  }
+  #md-overlay-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    width: min(900px, 100%);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #md-overlay-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: #c9d1d9;
+    flex-shrink: 0;
+  }
+  #md-overlay-close {
+    background: none;
+    border: none;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px 6px;
+  }
+  #md-overlay-close:hover { color: #f85149; }
+  #md-overlay-body {
+    overflow: auto;
+    padding: 18px 24px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    line-height: 1.5;
+    color: #c9d1d9;
+  }
+  #md-overlay-body h1, #md-overlay-body h2, #md-overlay-body h3 { margin: 14px 0 8px; }
+  #md-overlay-body p, #md-overlay-body ul, #md-overlay-body ol { margin: 8px 0; }
+  #md-overlay-body code { background: #161b22; padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+  #md-overlay-body pre { background: #161b22; padding: 10px 14px; border-radius: 6px; overflow-x: auto; }
+  #md-overlay-body pre code { background: none; padding: 0; }
+  #md-overlay-body a { color: #58a6ff; }
+  #md-overlay-body table { border-collapse: collapse; margin: 8px 0; }
+  #md-overlay-body th, #md-overlay-body td { border: 1px solid #30363d; padding: 4px 10px; }
   #main {
     flex: 1;
     display: flex;
@@ -1255,8 +1310,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     files.forEach(function(f) {
       var row = document.createElement('div');
       row.className = 'file-row';
-      row.title = f.filename + ' — click to jump to message';
-      row.setAttribute('data-msg-id', f.message_id);
+      var isMd = /\.(md|markdown)$/i.test(f.filename);
+      row.title = isMd ? f.filename + ' — click to preview' : f.filename + ' — click to download';
       var fn = document.createElement('div');
       fn.className = 'fn';
       fn.textContent = f.filename;
@@ -1275,8 +1330,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
       row.appendChild(meta);
       row.appendChild(line2);
       row.addEventListener('click', function() {
-        var target = document.querySelector('[data-msg-id="' + this.getAttribute('data-msg-id') + '"].msg');
-        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (isMd) {
+          openMdOverlay(f.id, f.filename);
+        } else {
+          window.location.href = '/files/' + encodeURIComponent(f.id) + '/download?token=' + encodeURIComponent(SC_TOKEN);
+        }
       });
       filesListEl.appendChild(row);
     });
@@ -1289,6 +1347,53 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   }
   window.__refreshFiles = refreshFiles;
   refreshFiles();
+
+  function openMdOverlay(fileId, filename) {
+    var ovl = document.createElement('div');
+    ovl.id = 'md-overlay';
+    var card = document.createElement('div');
+    card.id = 'md-overlay-card';
+    var hdr = document.createElement('div');
+    hdr.id = 'md-overlay-header';
+    var title = document.createElement('span');
+    title.textContent = filename;
+    var actions = document.createElement('span');
+    var dl = document.createElement('a');
+    dl.textContent = 'Download';
+    dl.href = '/files/' + encodeURIComponent(fileId) + '/download?token=' + encodeURIComponent(SC_TOKEN);
+    dl.style.marginRight = '14px';
+    dl.style.color = '#8b949e';
+    dl.style.textDecoration = 'none';
+    var close = document.createElement('button');
+    close.textContent = '\u2715';
+    close.id = 'md-overlay-close';
+    actions.appendChild(dl);
+    actions.appendChild(close);
+    hdr.appendChild(title);
+    hdr.appendChild(actions);
+    var body = document.createElement('div');
+    body.id = 'md-overlay-body';
+    body.textContent = 'Loading...';
+    card.appendChild(hdr);
+    card.appendChild(body);
+    ovl.appendChild(card);
+    document.body.appendChild(ovl);
+    function dismiss() { if (ovl.parentNode) ovl.parentNode.removeChild(ovl); document.removeEventListener('keydown', esc); }
+    function esc(e) { if (e.key === 'Escape') dismiss(); }
+    close.addEventListener('click', dismiss);
+    ovl.addEventListener('click', function(e) { if (e.target === ovl) dismiss(); });
+    document.addEventListener('keydown', esc);
+    fetch('/files/' + encodeURIComponent(fileId) + '/download?token=' + encodeURIComponent(SC_TOKEN))
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function(text){
+        if (text.length > 200 * 1024) { body.textContent = 'File too large for preview. Use Download.'; return; }
+        var html = window.marked ? window.marked.parse(text) : text;
+        body.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html, {
+          ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
+        }) : html;
+      })
+      .catch(function(err){ body.textContent = 'Failed to load: ' + (err.message || err); });
+  }
   var acIndex = -1;
 
   // Color palette for dynamic sender colors
