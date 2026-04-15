@@ -5,12 +5,18 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MENTION_FILE="$SCRIPT_DIR/new-mentions.txt"
 
-# Self-heal: if the listener noticed the server has rolled past us, pull the
-# new client scripts before processing the mention so we stay in sync.
-if [[ -f "$SCRIPT_DIR/update-available" ]]; then
-  bash "$SCRIPT_DIR/sc-update.sh" >/dev/null 2>&1 || true
-  rm -f "$SCRIPT_DIR/update-available"
+# Self-heal: directly compare our installed version to the server's. The
+# listener also writes an update-available flag, but that runs in a daemon
+# thread that races the hook — checking inline here is more reliable.
+if [[ -f "$SCRIPT_DIR/config" && -f "$SCRIPT_DIR/sc-version.txt" ]]; then
+  source "$SCRIPT_DIR/config"
+  LOCAL_VER=$(cat "$SCRIPT_DIR/sc-version.txt" 2>/dev/null || echo "")
+  REMOTE_VER=$(curl -fsS --max-time 3 "${SERVER_URL}/install/version" 2>/dev/null | tr -d '\r\n')
+  if [[ -n "$LOCAL_VER" && -n "$REMOTE_VER" && "$LOCAL_VER" != "$REMOTE_VER" ]]; then
+    bash "$SCRIPT_DIR/sc-update.sh" >/dev/null 2>&1 || true
+  fi
 fi
+rm -f "$SCRIPT_DIR/update-available"
 
 if [[ ! -f "$MENTION_FILE" ]] || [[ ! -s "$MENTION_FILE" ]]; then
   exit 0
