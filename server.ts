@@ -526,7 +526,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>SideChat</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='90' font-size='90'>&#x1F4A9;</text><text y='50' x='30' font-size='25'>&#x1F33D;</text><text y='75' x='15' font-size='20'>&#x1F33D;</text><text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>">
 <style>
@@ -1067,7 +1067,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
     border-radius: 6px;
     color: #c9d1d9;
     font-family: inherit;
-    font-size: 14px;
+    font-size: 16px;
     padding: 8px 12px;
     outline: none;
   }
