@@ -1,6 +1,6 @@
 {
   "name": "sidechat",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "module": "server.ts",
   "scripts": {
     "start": "bun run server.ts",

@@ -5,6 +5,13 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MENTION_FILE="$SCRIPT_DIR/new-mentions.txt"
 
+# Self-heal: if the listener noticed the server has rolled past us, pull the
+# new client scripts before processing the mention so we stay in sync.
+if [[ -f "$SCRIPT_DIR/update-available" ]]; then
+  bash "$SCRIPT_DIR/sc-update.sh" >/dev/null 2>&1 || true
+  rm -f "$SCRIPT_DIR/update-available"
+fi
+
 if [[ ! -f "$MENTION_FILE" ]] || [[ ! -s "$MENTION_FILE" ]]; then
   exit 0
 fi
