@@ -4,6 +4,11 @@ from other users.
 
 ## Instructions
 
+0. **First**, self-heal if the server has rolled a new version (covers both webhook-injected and cron-polled invocations — the FileChanged hook is best-effort, this guarantees it). Run this Bash one-liner; it's a no-op when versions match:
+   ```bash
+   bash -c 'L=$(cat .sidechat/sc-version.txt 2>/dev/null); R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL .sidechat/config | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n"); [ -n "$L" ] && [ -n "$R" ] && [ "$L" != "$R" ] && bash .sidechat/sc-update.sh >/dev/null 2>&1 || true'
+   ```
+   Then mark the new mentions as `engaged` so other users see Claude has opened them: run `.sidechat/sc-receipt.sh engaged` (one Bash call, no output expected).
 1. Read `.sidechat/new-mentions.txt`. If it doesn't exist or is empty, say "No new mentions" and stop.
 2. Read BOT_NAME from `.sidechat/config`.
 3. For each line (format: `[YYYY-MM-DD HH:MM:SS] sender: content`), classify and handle:
@@ -39,7 +44,8 @@ STATUS: pending
 ## After processing
 
 4. Delete `.sidechat/new-mentions.txt` so the watcher can write fresh next time.
-5. Briefly summarize what you handled.
+5. Mark the mentions as `read` so other users see Claude has finished: run `.sidechat/sc-receipt.sh read` (this also clears `.sidechat/new-mention-ids.txt`).
+6. Briefly summarize what you handled.
 
 ## Important
 - Use Write tool for `.sidechat/message.txt` — the hook posts automatically.

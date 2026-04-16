@@ -3168,7 +3168,7 @@ app.get("/admin", requireAdmin, (c) => {
   setInterval(refresh, 10000);
 })();
 </script>
-<div id="og-mascot" title="The original SidChat mascot — never forgotten" style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:default;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
+<div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon." style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:default;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
 </body>
 </html>`);
 });

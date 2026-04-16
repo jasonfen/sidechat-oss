@@ -2,3 +2,8 @@ node_modules/
 bun.lockb
 .env
 .sidechat/
+.claude/agent-memory/
+.claude/agents/
+.claude/settings.local.json
+*.crt
+*.key

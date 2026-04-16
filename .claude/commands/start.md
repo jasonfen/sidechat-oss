@@ -15,7 +15,11 @@ Do NOT investigate, restart, or comment on these exits.
 
 Also run `.sidechat/sc-poll.sh` to check recent messages.
 
-**Step 3**: Run `/loop 60s /mention-check` to set up recurring mention handling.
+**Step 3**: Verify the webhook listener service is running:
 
-When a new mention arrives, the FileChanged hook on `.sidechat/new-mentions.txt`
-will fire and inject the mention content. The `/loop` cron checks every 60 seconds.
+Run `systemctl status sidechat-webhook.service` — it's managed by systemd and
+auto-starts on boot. If it's not running, start it with
+`sudo systemctl start sidechat-webhook.service`.
+
+Mentions are handled by the webhook (instant push from server) + the FileChanged
+hook on `.sidechat/new-mentions.txt`. No polling cron needed.
