@@ -2146,6 +2146,49 @@ const app = new Hono();
 // Visible in browser DevTools Network tab and scrapable by downstream tools.
 app.use("*", timing());
 
+// --- Content-Security-Policy (report-only phase) ---
+// Shipping as report-only first so violations surface in Loki without
+// breaking the UI. Flip to enforcing Content-Security-Policy once the
+// policy is verified clean against the .md viewer and admin inline scripts.
+const CSP_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "report-uri /csp-report",
+].join("; ");
+app.use("*", async (c, next) => {
+  await next();
+  c.header("Content-Security-Policy-Report-Only", CSP_POLICY);
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+// POST /csp-report — CSP violation reporter
+app.post("/csp-report", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const report = body?.["csp-report"] ?? body;
+    logEvent("csp.violation", {
+      ip: getClientIP(c),
+      directive: report?.["violated-directive"] ?? report?.["effective-directive"],
+      blocked: report?.["blocked-uri"],
+      document: report?.["document-uri"],
+      source: report?.["source-file"],
+      line: report?.["line-number"],
+    });
+  } catch (e) {
+    logEvent("csp.violation.parse_err", { ip: getClientIP(c), err: String(e) });
+  }
+  return c.body(null, 204);
+});
+
 // --- Canonical URL redirect ---
 // Redirect HTTP / short hostname requests to the HTTPS FQDN
 const CANONICAL_HOST = Bun.env.CANONICAL_HOST ?? "";
