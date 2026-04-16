@@ -3168,7 +3168,19 @@ app.get("/admin", requireAdmin, (c) => {
   setInterval(refresh, 10000);
 })();
 </script>
-<div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon." style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:default;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
+<div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon. (click to toggle favicon)" style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:pointer;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
+<script>
+(function(){
+  var ic = document.querySelector('link[rel="icon"]');
+  var mascot = document.getElementById('og-mascot');
+  if (!ic || !mascot) return;
+  var flower = ic.href;
+  var corn = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='78' font-size='78' text-anchor='middle'>&#x1F33D;&#x1F4A9;</text></svg>";
+  mascot.addEventListener('click', function() {
+    ic.href = (ic.href === flower) ? corn : flower;
+  });
+})();
+</script>
 </body>
 </html>`);
 });
