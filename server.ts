@@ -302,6 +302,31 @@ function logEvent(event: string, fields: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ ts: localTimestamp(), event, ...fields }));
 }
 
+// --- CSRF (double-submit cookie) ---
+// Issue: set httpOnly cookie + embed token in HTML as <meta name="csrf">.
+// Verify on POST: cookie value must equal X-CSRF-Token header.
+// Browsers enforce same-origin cookie policy, so cross-site forgeries can't
+// set the cookie. The header echo proves the page was loaded same-origin.
+function issueCsrfToken(c: Context): string {
+  const existing = getCookie(c, "csrf_token");
+  if (existing && /^[a-f0-9]{32,}$/.test(existing)) return existing;
+  const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  setCookie(c, "csrf_token", token, {
+    httpOnly: true,
+    secure: isRequestSecure(c),
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 60 * 60 * 4,
+  });
+  return token;
+}
+
+function verifyCsrfToken(c: Context): boolean {
+  const cookieToken = getCookie(c, "csrf_token");
+  const headerToken = c.req.header("x-csrf-token");
+  return !!cookieToken && !!headerToken && cookieToken === headerToken;
+}
+
 function adminSessionIdShort(token: string | undefined | null): string | undefined {
   return token ? token.slice(0, 6) : undefined;
 }
@@ -1980,11 +2005,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 
 // --- Watch Login Page ---
 
-const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
+const watchLoginPage = (csrfToken: string) => `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="${csrfToken}">
 <title>SideChat — Login</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
@@ -2092,9 +2118,10 @@ const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
     errEl.style.display = 'none';
     var username = document.getElementById('username').value;
     var password = document.getElementById('password').value;
+    var csrf = document.querySelector('meta[name="csrf"]').getAttribute('content');
     fetch('/watch/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
       credentials: 'same-origin',
       body: JSON.stringify({ username: username, password: password })
     }).then(function(r) {
@@ -2149,11 +2176,16 @@ app.get("/watch/login", (c) => {
     ).get(token);
     if (session) return c.redirect("/");
   }
-  return c.html(WATCH_LOGIN_PAGE);
+  const csrfToken = issueCsrfToken(c);
+  return c.html(watchLoginPage(csrfToken));
 });
 
 // POST /watch/login — observer authentication
 app.post("/watch/login", async (c) => {
+  if (!verifyCsrfToken(c)) {
+    logEvent("observer.login.fail", { ip: getClientIP(c), reason: "csrf_invalid" });
+    return c.json({ error: "CSRF verification failed" }, 403);
+  }
   const limited = checkAuthRateLimit(c);
   if (limited) { logEvent("observer.login.fail", { username_attempted: "unknown", ip: getClientIP(c), reason: "rate_limit" }); return limited; }
   const ip = getClientIP(c);
@@ -2812,11 +2844,13 @@ app.post("/auth/token", async (c) => {
 
 // GET /admin/login — admin login page
 app.get("/admin/login", (c) => {
+  const csrfToken = issueCsrfToken(c);
   return c.html(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="${csrfToken}">
 <title>SideChat — Admin Login</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='rgb(126,231,135)'><ellipse cx='50' cy='15' rx='13' ry='20'/><ellipse cx='84' cy='40' rx='13' ry='20' transform='rotate(72 84 40)'/><ellipse cx='71' cy='82' rx='13' ry='20' transform='rotate(144 71 82)'/><ellipse cx='29' cy='82' rx='13' ry='20' transform='rotate(216 29 82)'/><ellipse cx='16' cy='40' rx='13' ry='20' transform='rotate(288 16 40)'/></g><circle cx='50' cy='50' r='26' fill='rgb(56,139,253)'/><path d='M34 45 h32 a3 3 0 0 1 3 3 v10 a3 3 0 0 1 -3 3 h-20 l-7 6 v-6 h-5 a3 3 0 0 1 -3 -3 v-10 a3 3 0 0 1 3 -3 z' fill='white'/></svg>">
 <style>
@@ -2867,9 +2901,10 @@ app.get("/admin/login", (c) => {
   form.addEventListener('submit', function(e) {
     e.preventDefault();
     errEl.style.display = 'none';
+    var csrf = document.querySelector('meta[name="csrf"]').getAttribute('content');
     fetch('/admin/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
       credentials: 'same-origin',
       body: JSON.stringify({ username: document.getElementById('username').value, password: document.getElementById('password').value })
     }).then(function(r) {
@@ -3219,6 +3254,10 @@ app.get("/admin", requireAdmin, (c) => {
 
 // POST /admin/login — no auth required
 app.post("/admin/login", async (c) => {
+  if (!verifyCsrfToken(c)) {
+    logEvent("admin.login.fail", { ip: getClientIP(c), reason: "csrf_invalid" });
+    return c.json({ error: "CSRF verification failed" }, 403);
+  }
   const limited = checkAuthRateLimit(c);
   if (limited) { logEvent("admin.login.fail", { ip: getClientIP(c), reason: "rate_limit" }); return limited; }
   const ip = getClientIP(c);
