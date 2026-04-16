@@ -3171,13 +3171,28 @@ app.get("/admin", requireAdmin, (c) => {
 <div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon. (click to toggle favicon)" style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:pointer;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
 <script>
 (function(){
-  var ic = document.querySelector('link[rel="icon"]');
   var mascot = document.getElementById('og-mascot');
-  if (!ic || !mascot) return;
-  var flower = ic.href;
-  var corn = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='78' font-size='78' text-anchor='middle'>&#x1F33D;&#x1F4A9;</text></svg>";
+  if (!mascot) return;
+  var flowerLink = document.querySelector('link[rel="icon"]');
+  if (!flowerLink) return;
+  var flower = flowerLink.getAttribute('href');
+  var corn = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+    "<text x='50' y='78' font-size='78' text-anchor='middle'>\uD83C\uDF3D\uD83D\uDCA9</text></svg>"
+  );
+  var showingCorn = false;
+  function setFav(href) {
+    var existing = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+    for (var i = 0; i < existing.length; i++) existing[i].remove();
+    var link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = 'image/svg+xml';
+    link.href = href;
+    document.head.appendChild(link);
+  }
   mascot.addEventListener('click', function() {
-    ic.href = (ic.href === flower) ? corn : flower;
+    showingCorn = !showingCorn;
+    setFav(showingCorn ? corn : flower);
   });
 })();
 </script>
