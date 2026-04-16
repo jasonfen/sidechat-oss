@@ -86,6 +86,7 @@ try { db.exec("ALTER TABLE clients ADD COLUMN webhook_url TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN webhook_secret TEXT"); } catch {}
 try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN last_known_version TEXT"); } catch {}
+try { db.exec("ALTER TABLE observers ADD COLUMN role TEXT NOT NULL DEFAULT 'observer'"); } catch {}
 
 // --- Build version ---
 // SERVER_VERSION = human-readable semver from package.json (e.g. "2.1.0").
@@ -300,6 +301,34 @@ function localTimestamp(): string {
 
 function logEvent(event: string, fields: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ ts: localTimestamp(), event, ...fields }));
+}
+
+// --- Bootstrap admin observer ---
+// If no admin exists in the observers table and ADMIN_USER + ADMIN_PASSWORD_HASH
+// env vars are set, seed one admin observer. Idempotent — only fires when the
+// admin set is empty. Env stays meaningful as a recovery hatch ("forgot all
+// admin passwords → set env, restart, login").
+{
+  if (ADMIN_PASSWORD_HASH && !ADMIN_PASSWORD_HASH.startsWith("$2")) {
+    throw new Error("ADMIN_PASSWORD_HASH is not a valid bcrypt hash (must start with $2). Refusing to start.");
+  }
+  if (ADMIN_USER && ADMIN_PASSWORD_HASH) {
+    db.transaction(() => {
+      const adminCount = (db.query("SELECT COUNT(*) AS n FROM observers WHERE role = 'admin'").get() as any).n;
+      if (adminCount > 0) return;
+      const existing = db.query("SELECT id FROM observers WHERE username = ?").get(ADMIN_USER) as any;
+      if (existing) {
+        db.run("UPDATE observers SET role = 'admin', password_hash = ?, status = 'active' WHERE id = ?", [ADMIN_PASSWORD_HASH, existing.id]);
+        logEvent("admin.bootstrap.restored", { username: ADMIN_USER, observer_id: existing.id, action: "promoted_existing" });
+      } else {
+        db.run(
+          "INSERT INTO observers (username, password_hash, status, can_post, role, created_at) VALUES (?, ?, 'active', 1, 'admin', ?)",
+          [ADMIN_USER, ADMIN_PASSWORD_HASH, new Date().toISOString()]
+        );
+        logEvent("admin.bootstrap.restored", { username: ADMIN_USER, action: "inserted_new" });
+      }
+    })();
+  }
 }
 
 // --- CSRF (double-submit cookie) ---
@@ -2784,19 +2813,39 @@ async function requireObserver(c: Context, next: Next) {
 }
 
 // --- Admin Auth Middleware ---
-
+//
+// Admin auth is now backed by the observers table with role='admin'. The
+// session cookie is observer_session (set by /admin/login with a shorter
+// ADMIN_SESSION_TTL_HOURS lifetime than /watch/login's 30-day default).
+// Per fenbot's R2: re-query observers.role on every request so a demoted
+// admin loses access immediately, no session invalidation needed.
+// Stale legacy admin_session cookies log admin.session.legacy and redirect
+// (response shape identical to no-session — no fingerprinting).
 async function requireAdmin(c: Context, next: Next) {
-  const token = getCookie(c, "admin_session");
-  if (!token) return c.redirect("/admin/login");
-  const session = db.query(
-    "SELECT * FROM admin_sessions WHERE token = ? AND expires_at > ?"
-  ).get(token, new Date().toISOString()) as any;
-  if (!session) {
-    logEvent("admin.session.expired", { ip: getClientIP(c), admin_session_id: adminSessionIdShort(token) });
-    return c.redirect("/admin/login");
+  const token = getCookie(c, "observer_session");
+  if (token) {
+    const session = db.query(
+      `SELECT os.observer_id, os.expires_at, o.username, o.role, o.status
+       FROM observer_sessions os
+       JOIN observers o ON o.id = os.observer_id
+       WHERE os.token = ? AND (os.expires_at IS NULL OR os.expires_at > ?)`
+    ).get(token, new Date().toISOString()) as any;
+    if (session && session.role === "admin" && session.status === "active") {
+      c.set("admin_observer_id", session.observer_id);
+      c.set("admin_username", session.username);
+      c.set("admin_session_token", token);
+      await next();
+      return;
+    }
   }
-  c.set("admin_session_token", token);
-  await next();
+  // Legacy admin_session cookie path — log and clear, then fall through to
+  // standard "no session" redirect so response shape is indistinguishable.
+  const legacy = getCookie(c, "admin_session");
+  if (legacy) {
+    logEvent("admin.session.legacy", { ip: getClientIP(c) });
+    deleteCookie(c, "admin_session", { path: "/" });
+  }
+  return c.redirect("/admin/login");
 }
 
 // --- Registration ---
@@ -3046,6 +3095,8 @@ app.get("/admin", requireAdmin, (c) => {
   .badge.active { background: #0d4429; color: #3fb950; }
   .badge.pending { background: #3d2e00; color: #d29922; }
   .badge.revoked { background: #3d1a1a; color: #f85149; }
+  .badge.role-admin { background: #1f2d4a; color: #79c0ff; }
+  .badge.role-observer { background: #21262d; color: #8b949e; }
   .btn { padding: 4px 12px; border-radius: 6px; font-family: inherit; font-size: 12px; cursor: pointer; border: 1px solid; }
   .btn-approve { background: #238636; border-color: #2ea043; color: #fff; }
   .btn-approve:hover { background: #2ea043; }
@@ -3182,12 +3233,21 @@ app.get("/admin", requireAdmin, (c) => {
   function renderObservers(observers) {
     document.getElementById('obs-count').textContent = '(' + observers.length + ')';
     if (!observers.length) { document.getElementById('obs-body').innerHTML = '<div class="empty">No observers</div>'; return; }
-    var html = '<table><tr><th>Username</th><th>Status</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Actions</th></tr>';
+    var html = '<table><tr><th>Username</th><th>Role</th><th>Status</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Actions</th></tr>';
     observers.forEach(function(o) {
-      var badge = '<span class="badge ' + o.status + '">' + o.status + '</span>';
-      html += '<tr><td>' + esc(o.username) + '</td><td>' + badge + '</td><td>' + (o.can_post ? 'yes' : 'no') + '</td><td>' + relTime(o.last_seen) + '</td><td>' + esc(o.last_ip || '') + '</td>';
+      var statusBadge = '<span class="badge ' + o.status + '">' + o.status + '</span>';
+      var role = o.role || 'observer';
+      var roleBadge = '<span class="badge ' + (role === 'admin' ? 'role-admin' : 'role-observer') + '">' + role + '</span>';
+      html += '<tr><td>' + esc(o.username) + '</td><td>' + roleBadge + '</td><td>' + statusBadge + '</td><td>' + (o.can_post ? 'yes' : 'no') + '</td><td>' + relTime(o.last_seen) + '</td><td>' + esc(o.last_ip || '') + '</td>';
       if (o.status === 'active') {
-        html += '<td><button class="btn btn-revoke" data-admin-action="observer-revoke" data-observer-id="' + esc(String(o.id)) + '">Revoke</button></td>';
+        var actions = '';
+        if (role === 'admin') {
+          actions += '<button class="btn" data-admin-action="observer-demote" data-observer-id="' + esc(String(o.id)) + '">Demote</button> ';
+        } else {
+          actions += '<button class="btn" data-admin-action="observer-promote" data-observer-id="' + esc(String(o.id)) + '">Promote</button> ';
+        }
+        actions += '<button class="btn btn-revoke" data-admin-action="observer-revoke" data-observer-id="' + esc(String(o.id)) + '">Revoke</button>';
+        html += '<td>' + actions + '</td>';
       } else {
         html += '<td></td>';
       }
@@ -3261,8 +3321,9 @@ app.get("/admin", requireAdmin, (c) => {
     if (action) {
       var fp = t.getAttribute('data-fingerprint');
       var oid = t.getAttribute('data-observer-id');
-      if (action === 'observer-revoke' && oid) {
-        adminAction('/admin/observers/' + encodeURIComponent(oid) + '/revoke', refresh);
+      if ((action === 'observer-revoke' || action === 'observer-promote' || action === 'observer-demote') && oid) {
+        var verb = action.split('-')[1];  // revoke | promote | demote
+        adminAction('/admin/observers/' + encodeURIComponent(oid) + '/' + verb, refresh);
       } else if (fp) {
         adminAction('/admin/clients/' + encodeURIComponent(fp) + '/' + action, refresh);
       }
@@ -3370,17 +3431,26 @@ app.post("/admin/login", async (c) => {
   if (!parsed.ok) { logEvent("admin.login.fail", { ip, reason: "bad_request_body" }); return parsed.res; }
   const body = parsed.body;
 
-  if (body.username !== ADMIN_USER || !ADMIN_PASSWORD_HASH) {
+  // Auth backed by observers table with role='admin' (env-bootstrapped admin
+  // is now just an observer row — see bootstrap block near top of file).
+  const observer = db.query(
+    "SELECT * FROM observers WHERE username = ?"
+  ).get(body.username) as any;
+  if (!observer || observer.status !== "active" || observer.role !== "admin") {
     recordAuthFailure(c);
-    logEvent("admin.login.fail", { ip, reason: ADMIN_PASSWORD_HASH ? "bad_username" : "no_password_configured" });
+    logEvent("admin.login.fail", {
+      ip,
+      reason: !observer ? "no_such_user" : observer.status !== "active" ? "inactive" : "not_admin",
+      username_attempted: body.username,
+    });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
 
-  const valid = await Bun.password.verify(body.password, ADMIN_PASSWORD_HASH);
+  const valid = await Bun.password.verify(body.password, observer.password_hash);
   if (!valid) {
     recordAuthFailure(c);
-    logEvent("admin.login.fail", { ip, reason: "bad_password" });
+    logEvent("admin.login.fail", { ip, reason: "bad_password", username_attempted: body.username });
     await Bun.sleep(500);
     return c.json({ error: "Invalid credentials" }, 401);
   }
@@ -3389,27 +3459,30 @@ app.post("/admin/login", async (c) => {
   const now = new Date();
   const expires = new Date(now.getTime() + ADMIN_SESSION_TTL_HOURS * 3600 * 1000);
   db.run(
-    "INSERT INTO admin_sessions (token, expires_at, created_at) VALUES (?, ?, ?)",
-    [token, expires.toISOString(), now.toISOString()]
+    "INSERT INTO observer_sessions (token, observer_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    [token, observer.id, now.toISOString(), expires.toISOString()]
   );
+  db.run("UPDATE observers SET last_seen = ?, last_ip = ? WHERE id = ?", [now.toISOString(), ip, observer.id]);
 
-  setCookie(c, "admin_session", token, {
+  setCookie(c, "observer_session", token, {
     httpOnly: true,
     secure: isRequestSecure(c),
     sameSite: "Strict",
     path: "/",
   });
 
-  logEvent("admin.login.ok", { ip, admin_session_id: adminSessionIdShort(token) });
+  logEvent("admin.login.ok", { ip, observer_id: observer.id, username: observer.username, admin_session_id: adminSessionIdShort(token) });
   return c.json({ ok: true });
 });
 
 // POST /admin/logout — admin auth required
 app.post("/admin/logout", requireAdmin, async (c) => {
-  const token = getCookie(c, "admin_session");
-  if (token) db.run("DELETE FROM admin_sessions WHERE token = ?", [token]);
+  const token = getCookie(c, "observer_session");
+  if (token) db.run("DELETE FROM observer_sessions WHERE token = ?", [token]);
+  deleteCookie(c, "observer_session", { path: "/" });
+  // Also clear any stale legacy admin_session cookie (defense in depth).
   deleteCookie(c, "admin_session", { path: "/" });
-  logEvent("admin.logout", { ip: getClientIP(c), admin_session_id: adminSessionIdShort(token) });
+  logEvent("admin.logout", { ip: getClientIP(c), observer_id: c.get("admin_observer_id"), username: c.get("admin_username") });
   return c.redirect("/admin/login");
 });
 
@@ -3453,7 +3526,7 @@ app.get("/admin/data", requireAdmin, async (c) => {
   const pending = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'pending' ORDER BY registered_at DESC`).all();
   const active = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'active' ORDER BY last_seen DESC`).all();
   const revoked = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'revoked'`).all();
-  const observersList = db.query("SELECT id, username, status, can_post, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
+  const observersList = db.query("SELECT id, username, status, can_post, role, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
   const installURLs = getInstallURLs();
 
   const fileStorageUsed = getTotalFileStorage();
@@ -3553,10 +3626,112 @@ app.post("/admin/observers", requireAdmin, async (c) => {
 // POST /admin/observers/:id/revoke
 app.post("/admin/observers/:id/revoke", requireAdmin, async (c) => {
   const id = parseInt(c.req.param("id"), 10);
-  db.run("UPDATE observers SET status = 'revoked' WHERE id = ?", [id]);
-  logEvent("observer.revoked", { id, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
+  if (!Number.isFinite(id)) return c.json({ error: "Invalid id" }, 400);
+  const ip = getClientIP(c);
+  const actorId = c.get("admin_observer_id");
+  const actorUsername = c.get("admin_username");
+  const target = db.query("SELECT id, username, role, status FROM observers WHERE id = ?").get(id) as any;
+  if (!target) {
+    logEvent("observer.revoke.fail", { actor_observer_id: actorId, target_id: id, ip, reason: "target_not_found" });
+    return c.json({ error: "Observer not found" }, 404);
+  }
+  // Atomic last-admin guard: refuse to revoke if target is admin AND would
+  // leave fewer than one remaining admin. Single conditional UPDATE so
+  // concurrent revokes can't both pass the count check.
+  const result = db.run(
+    `UPDATE observers SET status = 'revoked'
+     WHERE id = ? AND status = 'active'
+       AND (role <> 'admin' OR (SELECT COUNT(*) FROM observers WHERE role = 'admin' AND status = 'active') > 1)`,
+    [id]
+  );
+  if (result.changes === 0) {
+    if (target.role === "admin") {
+      logEvent("observer.revoke.fail", { actor_observer_id: actorId, target_id: id, target_username: target.username, ip, reason: "last_admin" });
+      return c.json({ error: "Cannot revoke the last admin" }, 409);
+    }
+    // Already revoked / inactive — idempotent success
+    return c.json({ status: "revoked" });
+  }
   db.run("DELETE FROM observer_sessions WHERE observer_id = ?", [id]);
+  logEvent("observer.revoke.ok", {
+    actor_observer_id: actorId,
+    actor_username: actorUsername,
+    target_id: target.id,
+    target_username: target.username,
+    role_before: target.role,
+    ip,
+  });
   return c.json({ status: "revoked" });
+});
+
+// POST /admin/observers/:id/promote — make observer an admin
+app.post("/admin/observers/:id/promote", requireAdmin, async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (!Number.isFinite(id)) return c.json({ error: "Invalid id" }, 400);
+  const ip = getClientIP(c);
+  const actorId = c.get("admin_observer_id");
+  const actorUsername = c.get("admin_username");
+  const target = db.query("SELECT id, username, role, status FROM observers WHERE id = ?").get(id) as any;
+  if (!target) {
+    logEvent("observer.promote.fail", { actor_observer_id: actorId, target_id: id, ip, reason: "target_not_found" });
+    return c.json({ error: "Observer not found" }, 404);
+  }
+  if (target.status !== "active") {
+    logEvent("observer.promote.fail", { actor_observer_id: actorId, target_id: id, target_username: target.username, ip, reason: "not_active" });
+    return c.json({ error: "Cannot promote a revoked observer" }, 409);
+  }
+  if (target.role === "admin") {
+    return c.json({ ok: true, role: "admin", message: "Already admin" });
+  }
+  db.run("UPDATE observers SET role = 'admin' WHERE id = ?", [id]);
+  logEvent("observer.promote.ok", {
+    actor_observer_id: actorId,
+    actor_username: actorUsername,
+    target_id: target.id,
+    target_username: target.username,
+    role_before: "observer",
+    role_after: "admin",
+    ip,
+  });
+  return c.json({ ok: true, role: "admin" });
+});
+
+// POST /admin/observers/:id/demote — strip admin role
+app.post("/admin/observers/:id/demote", requireAdmin, async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (!Number.isFinite(id)) return c.json({ error: "Invalid id" }, 400);
+  const ip = getClientIP(c);
+  const actorId = c.get("admin_observer_id");
+  const actorUsername = c.get("admin_username");
+  const target = db.query("SELECT id, username, role FROM observers WHERE id = ?").get(id) as any;
+  if (!target) {
+    logEvent("observer.demote.fail", { actor_observer_id: actorId, target_id: id, ip, reason: "target_not_found" });
+    return c.json({ error: "Observer not found" }, 404);
+  }
+  if (target.role !== "admin") {
+    return c.json({ ok: true, role: "observer", message: "Already observer" });
+  }
+  // Atomic last-admin guard — single conditional UPDATE.
+  const result = db.run(
+    `UPDATE observers SET role = 'observer'
+     WHERE id = ? AND role = 'admin'
+       AND (SELECT COUNT(*) FROM observers WHERE role = 'admin' AND status = 'active') > 1`,
+    [id]
+  );
+  if (result.changes === 0) {
+    logEvent("observer.demote.fail", { actor_observer_id: actorId, target_id: id, target_username: target.username, ip, reason: "last_admin" });
+    return c.json({ error: "Cannot demote the last admin" }, 409);
+  }
+  logEvent("observer.demote.ok", {
+    actor_observer_id: actorId,
+    actor_username: actorUsername,
+    target_id: target.id,
+    target_username: target.username,
+    role_before: "admin",
+    role_after: "observer",
+    ip,
+  });
+  return c.json({ ok: true, role: "observer" });
 });
 
 // POST /admin/settings/files — update file transfer limits
