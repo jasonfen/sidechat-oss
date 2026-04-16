@@ -291,8 +291,14 @@ function getClientIP(c: Context): string {
 // whatever) is the consumer's choice. Spec: docs/PLAN-logging-2026-04-15.md.
 const LOG_VERBOSE = (Bun.env.LOG_VERBOSE ?? "") === "1";
 
+function localTimestamp(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function logEvent(event: string, fields: Record<string, unknown> = {}): void {
-  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
+  console.log(JSON.stringify({ ts: localTimestamp(), event, ...fields }));
 }
 
 function adminSessionIdShort(token: string | undefined | null): string | undefined {

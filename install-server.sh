@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # SideChat Server Bootstrap
-# Usage: curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat/main/install-server.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash
 
 SIDECHAT_DIR="${SIDECHAT_DIR:-/opt/sidechat}"
-REPO_URL="https://github.com/jasonfen/sidechat.git"
+REPO_URL="https://github.com/jasonfen/sidechat-oss.git"
 
 echo ""
 echo "  ╔══════════════════════════════════╗"

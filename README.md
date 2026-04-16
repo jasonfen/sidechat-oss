@@ -55,38 +55,20 @@ for state, no external dependencies.
 
 ### Server Setup
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat/main/install-server.sh | bash
-```
+Docker is the recommended deployment. A prebuilt image is published on GHCR
+and auto-built on every push to `main` via GitHub Actions.
 
-This installs Bun (if needed), clones the repo, prompts for an admin password, and writes your `.env`. Then start the server:
-
-```bash
-cd /opt/sidechat
-bun run server.ts
-```
-
-The installer can optionally set up a systemd service so it runs in the background.
-
-### Server Setup (Docker)
-
-A prebuilt image is published on GHCR:
+**Quick start with `docker run`:**
 
 ```bash
 docker run -d --name sidechat \
   -p 3000:3000 \
-  -v sidechat-data:/var/sidechat \
+  -v /var/sidechat:/var/sidechat \
+  -e TZ=America/New_York \
   ghcr.io/jasonfen/sidechat-oss:latest
 ```
 
-All state (SQLite DB, archives, uploads, admin password hash) lives in the
-`/var/sidechat` volume. On first boot the entrypoint generates a random admin
-password, prints it **once** to `docker logs`, and persists only the bcrypt
-hash. Override with `-e ADMIN_PASSWORD=...` or `-e ADMIN_PASSWORD_HASH=...`.
-
-Single-writer SQLite — do not scale past one replica.
-
-Or with `docker compose` for a first-time setup. Save this as `compose.yml`:
+**Or with `docker compose`** (recommended). Save as `compose.yml`:
 
 ```yaml
 services:
@@ -97,13 +79,12 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - sidechat-data:/var/sidechat
-    # environment:
-    #   ADMIN_USER: admin
-    #   ADMIN_PASSWORD: changeme     # omit to auto-generate on first boot
+      - /var/sidechat:/var/sidechat
+    environment:
+      TZ: America/New_York          # log timestamps in local time
+      # ADMIN_USER: admin           # default: admin
+      # ADMIN_PASSWORD: changeme    # omit to auto-generate on first boot
 
-volumes:
-  sidechat-data:
 ```
 
 Then:
@@ -113,11 +94,31 @@ docker compose up -d
 docker compose logs sidechat | grep -A2 "generated admin"   # one-time password
 ```
 
-Log in at `http://<host>:3000/admin`. The bcrypt hash is persisted in the
-`sidechat-data` volume, so later restarts reuse it silently.
+All state (SQLite DB, archives, uploads, admin password hash) lives in
+`/var/sidechat`. On first boot the entrypoint generates a random admin
+password, prints it **once** to `docker logs`, and persists only the bcrypt
+hash. Override with `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` env vars.
 
-To build from source instead, clone the repo and swap the `image:` line for
-`build: .` — then `docker compose up -d --build`.
+Single-writer SQLite — do not scale past one replica.
+
+Log in at `http://<host>:3000/admin`.
+
+**Build from source** instead of using the prebuilt image:
+
+```bash
+git clone https://github.com/jasonfen/sidechat-oss.git
+cd sidechat-oss
+docker compose up -d --build
+```
+
+**Run without Docker** (requires [Bun](https://bun.sh)):
+
+```bash
+git clone https://github.com/jasonfen/sidechat-oss.git
+cd sidechat-oss
+bun install --production
+bun run server.ts
+```
 
 ### Client Setup
 
