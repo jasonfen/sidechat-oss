@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { timing } from "hono/timing";
 import { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
@@ -2112,6 +2113,11 @@ const WATCH_LOGIN_PAGE = `<!DOCTYPE html>
 // --- App ---
 
 const app = new Hono();
+
+// --- Server-Timing middleware ---
+// Emits Server-Timing response headers with per-request total duration.
+// Visible in browser DevTools Network tab and scrapable by downstream tools.
+app.use("*", timing());
 
 // --- Canonical URL redirect ---
 // Redirect HTTP / short hostname requests to the HTTPS FQDN
