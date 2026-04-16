@@ -105,15 +105,17 @@ if [[ -n "${TOKEN:-}" ]] && [[ -x "$SCRIPT_DIR/sc-auth.sh" ]]; then
   echo "Re-authenticating to publish version + restart listener..."
   "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1 && echo "  done" || echo "  sc-auth failed (run manually)"
 else
-  if pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
+  # Systemd first — pgrep matches the systemd process too, so user-fork
+  # would race against the systemd auto-restart for :7777.
+  if systemctl is-active sidechat-webhook.service &>/dev/null; then
+    echo "Restarting sidechat-webhook.service..."
+    sudo systemctl restart sidechat-webhook.service 2>/dev/null || true
+  elif pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
     echo "Restarting webhook listener..."
     pkill -f sc-webhook-server.py 2>/dev/null || true
     sleep 1
     rm -f "$SCRIPT_DIR/.webhook-listener.pid"
     "$SCRIPT_DIR/sc-webhook-listener.sh" >/dev/null 2>&1 || true
-  fi
-  if systemctl is-active sidechat-webhook.service &>/dev/null; then
-    sudo systemctl restart sidechat-webhook.service 2>/dev/null || true
   fi
 fi
 
