@@ -2988,7 +2988,8 @@ app.get("/admin", requireAdmin, (c) => {
     justify-content: space-between;
     align-items: center;
   }
-  #header h1 { font-size: 16px; font-weight: 600; color: #e6edf3; }
+  #header h1 { font-size: 16px; font-weight: 600; color: #e6edf3; display: flex; align-items: baseline; gap: 8px; }
+  #header h1 .version { font-size: 11px; font-weight: 400; color: #6e7681; letter-spacing: 0.3px; cursor: help; }
   #header .nav { display: flex; gap: 12px; align-items: center; }
   #header .nav a { color: #58a6ff; text-decoration: none; font-size: 13px; }
   #header .nav a:hover { text-decoration: underline; }
@@ -3036,7 +3037,7 @@ app.get("/admin", requireAdmin, (c) => {
 </head>
 <body>
 <div id="header">
-  <h1>SideChat Admin</h1>
+  <h1>SideChat Admin <span class="version" title="build ${SERVER_SHA}">v${SERVER_VERSION}</span></h1>
   <div class="nav">
     <a href="/">Chat</a>
     <button class="btn-logout" onclick="fetch('/admin/logout',{method:'POST',redirect:'follow'}).then(function(r){if(r.redirected)window.location.href=r.url;else window.location.href='/admin/login';})">Logout</button>
