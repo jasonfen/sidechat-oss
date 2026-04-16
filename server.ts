@@ -327,6 +327,26 @@ function verifyCsrfToken(c: Context): boolean {
   return !!cookieToken && !!headerToken && cookieToken === headerToken;
 }
 
+// Parse JSON body with proper status codes: 415 for non-JSON content-type,
+// 400 for missing/empty/malformed JSON. Replaces unguarded `c.req.json()`
+// calls that previously surfaced as 500s when clients sent form-encoded
+// or empty POSTs.
+async function parseJsonBody<T extends object>(c: Context): Promise<{ ok: true; body: T } | { ok: false; res: Response }> {
+  const ct = (c.req.header("content-type") ?? "").toLowerCase();
+  if (!ct.startsWith("application/json")) {
+    return { ok: false, res: c.json({ error: "Content-Type must be application/json" }, 415) };
+  }
+  try {
+    const body = await c.req.json<T>();
+    if (body === null || typeof body !== "object") {
+      return { ok: false, res: c.json({ error: "Request body must be a JSON object" }, 400) };
+    }
+    return { ok: true, body };
+  } catch {
+    return { ok: false, res: c.json({ error: "Invalid JSON body" }, 400) };
+  }
+}
+
 function adminSessionIdShort(token: string | undefined | null): string | undefined {
   return token ? token.slice(0, 6) : undefined;
 }
@@ -2232,7 +2252,9 @@ app.post("/watch/login", async (c) => {
   const limited = checkAuthRateLimit(c);
   if (limited) { logEvent("observer.login.fail", { username_attempted: "unknown", ip: getClientIP(c), reason: "rate_limit" }); return limited; }
   const ip = getClientIP(c);
-  const body = await c.req.json<{ username: string; password: string }>();
+  const parsed = await parseJsonBody<{ username: string; password: string }>(c);
+  if (!parsed.ok) { logEvent("observer.login.fail", { ip, reason: "bad_request_body" }); return parsed.res; }
+  const body = parsed.body;
 
   const observer = db.query(
     "SELECT * FROM observers WHERE username = ?"
@@ -2846,7 +2868,9 @@ app.post("/auth/token", async (c) => {
   const limited = checkAuthRateLimit(c);
   if (limited) { logEvent("auth.token.denied", { fingerprint: "unknown", ip: getClientIP(c), reason: "rate_limit" }); return limited; }
   const ip = getClientIP(c);
-  const body = await c.req.json<{ fingerprint: string; nonce: string; signature: string }>();
+  const parsed = await parseJsonBody<{ fingerprint: string; nonce: string; signature: string }>(c);
+  if (!parsed.ok) { logEvent("auth.token.denied", { fingerprint: "unknown", ip, reason: "bad_request_body" }); return parsed.res; }
+  const body = parsed.body;
 
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
@@ -3305,7 +3329,9 @@ app.post("/admin/login", async (c) => {
   const limited = checkAuthRateLimit(c);
   if (limited) { logEvent("admin.login.fail", { ip: getClientIP(c), reason: "rate_limit" }); return limited; }
   const ip = getClientIP(c);
-  const body = await c.req.json<{ username: string; password: string }>();
+  const parsed = await parseJsonBody<{ username: string; password: string }>(c);
+  if (!parsed.ok) { logEvent("admin.login.fail", { ip, reason: "bad_request_body" }); return parsed.res; }
+  const body = parsed.body;
 
   if (body.username !== ADMIN_USER || !ADMIN_PASSWORD_HASH) {
     recordAuthFailure(c);
