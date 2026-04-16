@@ -36,5 +36,7 @@ jobs:
           tags: |
             ghcr.io/jasonfen/sidechat-oss:latest
             ghcr.io/jasonfen/sidechat-oss:sha-${{ env.SHORT_SHA }}
+          build-args: |
+            BUILD_SHA=${{ env.SHORT_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
