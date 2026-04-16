@@ -2177,12 +2177,11 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-// --- Content-Security-Policy (report-only phase) ---
-// Shipping as report-only first so violations surface in Loki without
-// breaking the UI. Flip to enforcing Content-Security-Policy once the
-// policy is verified clean against the .md viewer and admin inline scripts.
-// script-src now uses a per-request nonce; 'unsafe-inline' removed (#11).
-// style-src keeps 'unsafe-inline' for now — next backlog cleanup.
+// --- Content-Security-Policy (enforcing) ---
+// script-src uses a per-request nonce ('unsafe-inline' removed, #11).
+// style-src keeps 'unsafe-inline' for now — separate cleanup.
+// Flipped from Report-Only to enforcing after #11 + adversarial soak (#4).
+// Violations still report to /csp-report so Loki keeps an audit trail.
 function cspPolicy(nonce: string): string {
   return [
     "default-src 'self'",
@@ -2199,7 +2198,7 @@ function cspPolicy(nonce: string): string {
 }
 app.use("*", async (c, next) => {
   await next();
-  c.header("Content-Security-Policy-Report-Only", cspPolicy(c.get("cspNonce") as string));
+  c.header("Content-Security-Policy", cspPolicy(c.get("cspNonce") as string));
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
