@@ -1416,10 +1416,22 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           el.title = calActivity[c.key] + ' messages';
           el.setAttribute('data-date', c.key);
           el.addEventListener('click', function(){
-            var target = document.getElementById('date-' + this.getAttribute('data-date'));
-            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            var dateAttr = this.getAttribute('data-date');
+            var clickedEl = this;
             calGridEl.querySelectorAll('.cal-day.active').forEach(function(a){ a.classList.remove('active'); });
-            this.classList.add('active');
+            clickedEl.classList.add('active');
+            var target = document.getElementById('date-' + dateAttr);
+            if (target) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              return;
+            }
+            // Older than the currently loaded window — fetch and re-render.
+            var parts = dateAttr.split('-');
+            var startOfDay = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10), 0, 0, 0);
+            loadMessagesSince(startOfDay).then(function(){
+              var newTarget = document.getElementById('date-' + dateAttr);
+              if (newTarget) newTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
           });
         }
       }
@@ -1787,11 +1799,52 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     .then(function(data) { allUsers = data.users || []; })
     .catch(function() {});
 
-  // Load history
-  fetch('/messages/all', { credentials: 'same-origin' })
+  // History window state. Initial load caps at 8h; older messages are
+  // fetched on demand via the calendar (clicking a date older than the
+  // current window) or scroll-to-top trigger. oldestLoadedTimestamp is
+  // the lower bound of the currently-rendered window.
+  var oldestLoadedTimestamp = new Date(Date.now() - 8 * 3600 * 1000);
+  var loadingOlder = false;
+
+  function loadMessagesSince(sinceDate) {
+    if (loadingOlder) return Promise.resolve();
+    loadingOlder = true;
+    var topMsg = messagesEl.querySelector('.msg');
+    var topMsgId = topMsg ? topMsg.getAttribute('data-msg-id') : null;
+    var sinceISO = sinceDate.toISOString();
+    return fetch('/messages?since=' + encodeURIComponent(sinceISO), { credentials: 'same-origin' })
+      .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function(data) {
+        seen.clear();
+        lastRenderedDate = '';
+        messagesEl.innerHTML = '';
+        oldestLoadedTimestamp = sinceDate;
+        data.messages.forEach(renderMessage);
+        // Anchor the scroll to where the user was looking, if possible.
+        if (topMsgId) {
+          var el = document.querySelector('[data-msg-id="' + topMsgId + '"]');
+          if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' });
+        } else {
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+      })
+      .finally(function() { loadingOlder = false; });
+  }
+
+  // Initial load: past 8 hours
+  fetch('/messages?since=' + encodeURIComponent(oldestLoadedTimestamp.toISOString()), { credentials: 'same-origin' })
     .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function(data) { data.messages.forEach(renderMessage); initialLoadDone = true; })
     .catch(function(err) { messagesEl.innerHTML = '<div style="color:#f85149;">Failed to load messages: ' + err.message + '</div>'; });
+
+  // Scroll-to-top: when the user scrolls to the top of the message list,
+  // extend the loaded window 8 hours further back.
+  messagesEl.addEventListener('scroll', function() {
+    if (loadingOlder) return;
+    if (messagesEl.scrollTop > 60) return;
+    var newSince = new Date(oldestLoadedTimestamp.getTime() - 8 * 3600 * 1000);
+    loadMessagesSince(newSince);
+  });
 
   // Autocomplete logic
   function getACWord() {
@@ -4046,13 +4099,21 @@ function withReceipts(msgs: Message[]) {
 }
 
 // GET /messages — session or observer auth required
+// Supports ?since=<ISO> (exclusive lower bound), ?until=<ISO> (inclusive
+// upper bound), or both together for a back-window fetch (used by the chat
+// client's load-older flow). With neither, returns the last 50.
 app.get("/messages", requireSessionOrObserver, (c) => {
   const since = c.req.query("since");
+  const until = c.req.query("until");
   let result: Message[];
 
-  if (since) {
-    const sinceDate = new Date(since);
-    result = messages.filter((m) => new Date(m.timestamp) > sinceDate);
+  if (since || until) {
+    const sinceTs = since ? new Date(since).getTime() : -Infinity;
+    const untilTs = until ? new Date(until).getTime() : Infinity;
+    result = messages.filter((m) => {
+      const t = new Date(m.timestamp).getTime();
+      return t > sinceTs && t <= untilTs;
+    });
   } else {
     result = messages.slice(-50);
   }
