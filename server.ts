@@ -3176,9 +3176,12 @@ app.get("/admin", requireAdmin, (c) => {
   var flowerLink = document.querySelector('link[rel="icon"]');
   if (!flowerLink) return;
   var flower = flowerLink.getAttribute('href');
-  var corn = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  var corn = "data:image/svg+xml," + encodeURIComponent(
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
-    "<text x='50' y='78' font-size='78' text-anchor='middle'>\uD83C\uDF3D\uD83D\uDCA9</text></svg>"
+    "<text y='90' font-size='90'>&#x1F4A9;</text>" +
+    "<text y='50' x='30' font-size='25'>&#x1F33D;</text>" +
+    "<text y='75' x='15' font-size='20'>&#x1F33D;</text>" +
+    "<text y='65' x='50' font-size='22'>&#x1F33D;</text></svg>"
   );
   var showingCorn = false;
   function setFav(href) {
