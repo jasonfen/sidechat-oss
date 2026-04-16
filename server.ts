@@ -616,7 +616,7 @@ process.on("SIGINT", async () => {
 
 // --- Web Frontend ---
 
-function buildChatPage(username: string, canPost: boolean, sessionToken: string): string {
+function buildChatPage(username: string, canPost: boolean, sessionToken: string, nonce: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -653,6 +653,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
   #sidebar.collapsed #calendar,
   #sidebar.collapsed #files-panel,
   #sidebar.collapsed #sidebar-label { display: none; }
+  #signout-btn { background: none; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 4px 12px; font-family: inherit; font-size: 12px; cursor: pointer; }
+  #signout-btn:hover { border-color: #8b949e; }
   #sidebar-header {
     padding: 0 14px;
     height: 45px;
@@ -1241,7 +1243,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
           <span id="bell-icon">&#x1F514;</span>
           <span id="bell-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#f85149;color:#fff;border-radius:50%;font-size:11px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;font-weight:700;"></span>
         </div>
-        <button id="signout-btn" style="background:none;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;padding:4px 12px;font-family:inherit;font-size:12px;cursor:pointer;" onmouseover="this.style.borderColor='#8b949e'" onmouseout="this.style.borderColor='#30363d'">Sign Out</button>
+        <button id="signout-btn">Sign Out</button>
       </div>
     </div>
     <div id="messages"></div>
@@ -1259,7 +1261,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 </div>
 <script src="/static/marked.min.js"></script>
 <script src="/static/dompurify.min.js"></script>
-<script>
+<script nonce="${nonce}">
 (function() {
   var SC_USER = '${username}';
   var SC_CAN_POST = ${canPost};
@@ -2025,7 +2027,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string)
 
 // --- Watch Login Page ---
 
-const watchLoginPage = (csrfToken: string) => `<!DOCTYPE html>
+const watchLoginPage = (csrfToken: string, nonce: string) => `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -2129,7 +2131,7 @@ const watchLoginPage = (csrfToken: string) => `<!DOCTYPE html>
     <button type="submit">Sign In</button>
   </form>
 </div>
-<script>
+<script nonce="${nonce}">
 (function() {
   var form = document.getElementById('login-form');
   var errEl = document.getElementById('error');
@@ -2166,25 +2168,38 @@ const app = new Hono();
 // Visible in browser DevTools Network tab and scrapable by downstream tools.
 app.use("*", timing());
 
+// --- Per-request CSP nonce ---
+// Generate a fresh base64 nonce per request and stash it on the context.
+// HTML responses interpolate it into every inline <script nonce="..."> so
+// the strict CSP below can drop 'unsafe-inline' from script-src.
+app.use("*", async (c, next) => {
+  c.set("cspNonce", crypto.randomUUID().replace(/-/g, ""));
+  await next();
+});
+
 // --- Content-Security-Policy (report-only phase) ---
 // Shipping as report-only first so violations surface in Loki without
 // breaking the UI. Flip to enforcing Content-Security-Policy once the
 // policy is verified clean against the .md viewer and admin inline scripts.
-const CSP_POLICY = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "report-uri /csp-report",
-].join("; ");
+// script-src now uses a per-request nonce; 'unsafe-inline' removed (#11).
+// style-src keeps 'unsafe-inline' for now — next backlog cleanup.
+function cspPolicy(nonce: string): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "report-uri /csp-report",
+  ].join("; ");
+}
 app.use("*", async (c, next) => {
   await next();
-  c.header("Content-Security-Policy-Report-Only", CSP_POLICY);
+  c.header("Content-Security-Policy-Report-Only", cspPolicy(c.get("cspNonce") as string));
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -2240,7 +2255,7 @@ app.get("/watch/login", (c) => {
     if (session) return c.redirect("/");
   }
   const csrfToken = issueCsrfToken(c);
-  return c.html(watchLoginPage(csrfToken));
+  return c.html(watchLoginPage(csrfToken, c.get("cspNonce") as string));
 });
 
 // POST /watch/login — observer authentication
@@ -2315,7 +2330,7 @@ app.post("/watch/logout", requireObserver, async (c) => {
 app.get("/", requireObserver, (c) => {
   const obs = c.get("observer") as any;
   const token = getCookie(c, "observer_session")!;
-  return c.html(buildChatPage(obs.username, !!obs.can_post, token));
+  return c.html(buildChatPage(obs.username, !!obs.can_post, token, c.get("cspNonce") as string));
 });
 
 // GET /metrics — Prometheus exposition format.
@@ -2520,7 +2535,7 @@ app.get("/health", (c) => {
       </div>
     </div>
   </div>
-<script>
+<script nonce="${c.get("cspNonce")}">
 (function() {
   var dot = document.getElementById('dot');
   var statusText = document.getElementById('status-text');
@@ -2961,7 +2976,7 @@ app.get("/admin/login", (c) => {
     <button type="submit">Sign In</button>
   </form>
 </div>
-<script>
+<script nonce="${c.get("cspNonce")}">
 (function() {
   var form = document.getElementById('login-form');
   var errEl = document.getElementById('error');
@@ -3050,6 +3065,8 @@ app.get("/admin", requireAdmin, (c) => {
   .toast { position: fixed; bottom: 16px; right: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 16px; font-size: 13px; display: none; z-index: 100; }
   .toast.error { border-color: #da3633; color: #f85149; }
   .toast.ok { border-color: #2ea043; color: #3fb950; }
+  #og-mascot { position: fixed; bottom: 8px; right: 10px; font-size: 18px; opacity: 0.15; cursor: pointer; user-select: none; transition: opacity 0.3s; }
+  #og-mascot:hover { opacity: 0.85; }
   .dim { color: #484f58; }
   .empty { color: #484f58; padding: 16px 12px; font-style: italic; }
   .install-cmd { background: #010409; border: 1px solid #21262d; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -3064,7 +3081,7 @@ app.get("/admin", requireAdmin, (c) => {
   <h1>SideChat Admin <span class="version" title="build ${SERVER_SHA}">v${SERVER_VERSION}</span></h1>
   <div class="nav">
     <a href="/">Chat</a>
-    <button class="btn-logout" onclick="fetch('/admin/logout',{method:'POST',redirect:'follow'}).then(function(r){if(r.redirected)window.location.href=r.url;else window.location.href='/admin/login';})">Logout</button>
+    <button class="btn-logout">Logout</button>
   </div>
 </div>
 <div class="container">
@@ -3097,7 +3114,7 @@ app.get("/admin", requireAdmin, (c) => {
   </div>
 </div>
 <div class="toast" id="toast"></div>
-<script>
+<script nonce="${c.get("cspNonce")}">
 (function() {
   var SERVER_VERSION_FOR_UI = '${SERVER_VERSION}';
   var SERVER_SHA_FOR_UI = '${SERVER_SHA}';
@@ -3131,8 +3148,8 @@ app.get("/admin", requireAdmin, (c) => {
     var html = '<table><tr><th>Name</th><th>Fingerprint</th><th>Source IP</th><th>Registered</th><th>Actions</th></tr>';
     clients.forEach(function(c) {
       html += '<tr><td>' + esc(c.name) + '</td><td class="fp">' + esc(c.fingerprint.slice(0,16)) + '&hellip;</td><td>' + esc(c.source_ip || '') + '</td><td>' + relTime(c.registered_at) + '</td>';
-      html += '<td><button class="btn btn-approve" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/approve&apos;,refresh)">Approve</button> ';
-      html += '<button class="btn btn-reject" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/reject&apos;,refresh)">Reject</button></td></tr>';
+      html += '<td><button class="btn btn-approve" data-admin-action="approve" data-fingerprint="' + esc(c.fingerprint) + '">Approve</button> ';
+      html += '<button class="btn btn-reject" data-admin-action="reject" data-fingerprint="' + esc(c.fingerprint) + '">Reject</button></td></tr>';
     });
     html += '</table>';
     document.getElementById('pending-body').innerHTML = html;
@@ -3155,8 +3172,8 @@ app.get("/admin", requireAdmin, (c) => {
       html += '<tr><td>' + esc(c.name) + '</td><td class="fp">' + esc(c.fingerprint.slice(0,16)) + '&hellip;</td><td>' + (c.can_post ? 'yes' : 'no') + '</td><td>' + relTime(c.last_seen) + '</td><td>' + esc(c.last_ip || '') + '</td>';
       html += '<td>' + (c.webhook_url ? '<span class="fp" title="' + esc(c.webhook_url) + '">webhook</span> ' : '') + '</td>';
       html += '<td>' + verBadge + '</td>';
-      html += '<td><button class="btn btn-revoke" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/revoke&apos;,refresh)">Revoke</button>';
-      if (c.webhook_url) html += ' <button class="btn" onclick="adminAction(&apos;/admin/clients/' + c.fingerprint + '/clear-webhook&apos;,refresh)">Clear Webhook</button>';
+      html += '<td><button class="btn btn-revoke" data-admin-action="revoke" data-fingerprint="' + esc(c.fingerprint) + '">Revoke</button>';
+      if (c.webhook_url) html += ' <button class="btn" data-admin-action="clear-webhook" data-fingerprint="' + esc(c.fingerprint) + '">Clear Webhook</button>';
       html += '</td></tr>';
     });
     html += '</table>';
@@ -3171,7 +3188,7 @@ app.get("/admin", requireAdmin, (c) => {
       var badge = '<span class="badge ' + o.status + '">' + o.status + '</span>';
       html += '<tr><td>' + esc(o.username) + '</td><td>' + badge + '</td><td>' + (o.can_post ? 'yes' : 'no') + '</td><td>' + relTime(o.last_seen) + '</td><td>' + esc(o.last_ip || '') + '</td>';
       if (o.status === 'active') {
-        html += '<td><button class="btn btn-revoke" onclick="adminAction(&apos;/admin/observers/' + o.id + '/revoke&apos;,refresh)">Revoke</button></td>';
+        html += '<td><button class="btn btn-revoke" data-admin-action="observer-revoke" data-observer-id="' + esc(String(o.id)) + '">Revoke</button></td>';
       } else {
         html += '<td></td>';
       }
@@ -3197,7 +3214,7 @@ app.get("/admin", requireAdmin, (c) => {
       var isTS = url.indexOf('.ts.net') !== -1;
       var label = isTS ? 'Tailscale' : url.replace('https://', '').replace('http://', '').split(':')[0];
       var cmd = 'curl -fsSL ' + url + '/install/client.sh | bash -s -- ' + url;
-      html += '<div class="install-cmd"><span class="label">' + esc(label) + '</span><code>' + esc(cmd) + '</code><button class="btn-copy" onclick="copyCmd(this)">Copy</button></div>';
+      html += '<div class="install-cmd"><span class="label">' + esc(label) + '</span><code>' + esc(cmd) + '</code><button class="btn-copy">Copy</button></div>';
     });
     el.innerHTML = html;
   }
@@ -3236,8 +3253,29 @@ app.get("/admin", requireAdmin, (c) => {
       })
       .catch(function(e) { toast(e.message, 'error'); });
   }
-  window.adminAction = adminAction;
-  window.refresh = refresh;
+  // Delegated click handler for dynamically generated buttons (CSP-friendly:
+  // no inline onclick handlers needed). Buttons declare intent via data-*.
+  document.addEventListener('click', function(e) {
+    var t = e.target;
+    if (!t || t.nodeName !== 'BUTTON') return;
+    var action = t.getAttribute('data-admin-action');
+    if (action) {
+      var fp = t.getAttribute('data-fingerprint');
+      var oid = t.getAttribute('data-observer-id');
+      if (action === 'observer-revoke' && oid) {
+        adminAction('/admin/observers/' + encodeURIComponent(oid) + '/revoke', refresh);
+      } else if (fp) {
+        adminAction('/admin/clients/' + encodeURIComponent(fp) + '/' + action, refresh);
+      }
+      return;
+    }
+    if (t.classList.contains('btn-copy')) { copyCmd(t); return; }
+    if (t.classList.contains('btn-logout')) {
+      fetch('/admin/logout', { method: 'POST', redirect: 'follow' })
+        .then(function(r) { window.location.href = r.redirected ? r.url : '/admin/login'; });
+      return;
+    }
+  });
 
   document.getElementById('obs-create-btn').addEventListener('click', function() {
     var user = document.getElementById('obs-user').value.trim();
@@ -3283,8 +3321,8 @@ app.get("/admin", requireAdmin, (c) => {
   setInterval(refresh, 10000);
 })();
 </script>
-<div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon. (click to toggle favicon)" style="position:fixed;bottom:8px;right:10px;font-size:18px;opacity:0.15;cursor:pointer;user-select:none;transition:opacity 0.3s;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=0.15">&#x1F33D;&#x1F4A9;</div>
-<script>
+<div id="og-mascot" title="The true north star of the project. Everything else was just scaffolding to deliver that favicon. (click to toggle favicon)">&#x1F33D;&#x1F4A9;</div>
+<script nonce="${c.get("cspNonce")}">
 (function(){
   var mascot = document.getElementById('og-mascot');
   if (!mascot) return;
