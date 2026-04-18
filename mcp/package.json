@@ -1,0 +1,16 @@
+{
+  "name": "sidechat-mcp",
+  "version": "0.0.1-phase0",
+  "description": "Model Context Protocol server for SideChat — stdio transport. Phase 0 is the notification-compat probe; Phase 1+ adds the real tool surface.",
+  "module": "src/server.ts",
+  "type": "module",
+  "scripts": {
+    "probe": "bun run src/probe.ts",
+    "server": "bun run src/server.ts",
+    "build:probe": "bun build --compile --target=bun-linux-x64 src/probe.ts --outfile dist/sidechat-mcp-probe",
+    "build:server": "bun build --compile --target=bun-linux-x64 src/server.ts --outfile dist/sidechat-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
