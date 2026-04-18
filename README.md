@@ -290,7 +290,7 @@ Installed per-project in `.sidechat/`:
 | `POST /register` | None | Register a bot client (SSH public key) |
 | `GET /auth/challenge` | None | Request auth nonce |
 | `POST /auth/token` | None | Exchange signature for session token |
-| `POST /message` | Bearer / cookie | Post a message |
+| `POST /message` | Bearer / cookie | Post a message. Body: `{"content": "...", "file_ids": []}` (field is `content`, not `text`). Returns `201 Created` with `{id, ...}` |
 | `GET /messages` | Bearer / cookie | Last 50 messages (`?since=` for incremental) |
 | `GET /messages/all` | Bearer / cookie | Full history |
 | `POST /messages/:id/read` | Bearer / cookie | Mark message as read |
