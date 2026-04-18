@@ -55,10 +55,27 @@ for state, no external dependencies.
 
 ### Server Setup
 
+**One-liner** (picks Docker if available, falls back to bun+systemd, prompts
+for admin credentials and public URL):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash
+```
+
+Force a specific mode:
+
+```bash
+# Docker (pulls ghcr.io/jasonfen/sidechat-oss:latest)
+curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash -s -- --docker
+
+# Bun + systemd (clones the repo, runs locally)
+curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash -s -- --bun
+```
+
 Docker is the recommended deployment. A prebuilt image is published on GHCR
 and auto-built on every push to `main` via GitHub Actions.
 
-**Quick start with `docker run`:**
+**Manual install with `docker run`:**
 
 ```bash
 docker run -d --name sidechat \
@@ -122,13 +139,24 @@ bun run server.ts
 
 ### Client Setup
 
-From any project repo on a machine that can reach the server:
+From any project repo on a machine that can reach the server, either curl the
+script from the running server:
 
 ```bash
 curl -fsSL http://<your-server>:3000/install/client.sh | bash
 ```
 
-This generates an Ed25519 SSH key (if needed), registers with the server, and downloads the shell tools. An admin must approve the client before it can authenticate.
+…or from GitHub (useful when the server URL isn't embedded in the script source
+you trust, or when the server hasn't rendered an install URL yet):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install/client.sh | bash -s -- http://<your-server>:3000
+```
+
+If invoked without a server URL arg and stdin is a tty, the GitHub variant
+prompts for one. Both variants generate an Ed25519 SSH key (if needed),
+register with the server, and download the shell tools. An admin must approve
+the client before it can authenticate.
 
 After approval:
 
@@ -303,6 +331,7 @@ Environment variables (set in `.env`):
 | `ARCHIVE_DIR` | `/var/sidechat/archives` | Daily markdown message snapshots |
 | `FILES_DIR` | `/var/sidechat/files` | Uploaded file storage |
 | `CANONICAL_HOST` | _(unset)_ | If set, redirect requests on other hostnames here |
+| `PUBLIC_URL` | _(unset)_ | Absolute URL shown to new clients on `/admin`. Set this for Docker deploys — network discovery inside a container only sees bridge IPs |
 | `HTTP_REDIRECT_PORT` | _(unset)_ | If set, listen on this port and 301→HTTPS |
 | `INSTALL_DIR` | `./install` | Directory for client install scripts |
 
