@@ -3553,10 +3553,17 @@ import { networkInterfaces } from "os";
 import { execSync } from "child_process";
 
 function getInstallURLs(): string[] {
+  // Containerized deploys should set PUBLIC_URL — network discovery inside a
+  // Docker container only sees the bridge network and produces unreachable
+  // URLs. When PUBLIC_URL is set we trust it and skip discovery entirely.
+  const publicUrl = Bun.env.PUBLIC_URL?.trim();
+  if (publicUrl) return [publicUrl.replace(/\/+$/, "")];
+
   const port = Bun.env.PORT ?? "3000";
   const urls: string[] = [];
 
-  // Check for Tailscale hostname
+  // Check for Tailscale hostname (bare-metal dev only; the CLI isn't present
+  // in our prod image and this silently fails there)
   try {
     const tsStatus = execSync("tailscale status --json 2>/dev/null", { timeout: 3000 });
     const ts = JSON.parse(tsStatus.toString());

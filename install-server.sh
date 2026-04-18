@@ -3,9 +3,22 @@ set -euo pipefail
 
 # SideChat Server Bootstrap
 # Usage: curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash
+#   --docker      install via Docker Compose (pulls ghcr.io/jasonfen/sidechat-oss:latest)
+#   --bun         install via bun+systemd (clones repo, runs locally)
+#   (no flag)     auto: Docker if `docker compose` is present and bun isn't, else bun
 
 SIDECHAT_DIR="${SIDECHAT_DIR:-/opt/sidechat}"
 REPO_URL="https://github.com/jasonfen/sidechat-oss.git"
+IMAGE="ghcr.io/jasonfen/sidechat-oss:latest"
+MODE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --docker) MODE="docker"; shift ;;
+    --bun)    MODE="bun";    shift ;;
+    *)        echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
 
 echo ""
 echo "  ╔══════════════════════════════════╗"
@@ -13,7 +26,121 @@ echo "  ║   SideChat Server Installer      ║"
 echo "  ╚══════════════════════════════════╝"
 echo ""
 
-# --- Prerequisites ---
+has_docker_compose() { command -v docker &>/dev/null && docker compose version &>/dev/null; }
+
+# Pick mode if not forced: prefer Docker when present (closer to prod); offer
+# bun fallback interactively only when a terminal is attached and docker is
+# unavailable.
+if [[ -z "$MODE" ]]; then
+  if has_docker_compose; then
+    MODE="docker"
+  elif command -v bun &>/dev/null || [[ -r /dev/tty ]]; then
+    MODE="bun"
+  else
+    echo "ERROR: neither 'docker compose' nor 'bun' available, and no tty to prompt." >&2
+    echo "  Install docker (recommended) or re-run with --bun on a machine with bun." >&2
+    exit 1
+  fi
+fi
+echo "  Install mode: $MODE"
+echo ""
+
+prompt_admin_creds() {
+  # Sets ADMIN_USER and ADMIN_HASH in the caller's scope.
+  local pw confirm
+  read -rp "  Admin username [admin]: " ADMIN_USER < /dev/tty
+  ADMIN_USER="${ADMIN_USER:-admin}"
+  while true; do
+    read -rsp "  Admin password (min 8 chars): " pw < /dev/tty; echo ""
+    if [[ ${#pw} -lt 8 ]]; then echo "  Password must be at least 8 characters" >&2; continue; fi
+    read -rsp "  Confirm password: " confirm < /dev/tty; echo ""
+    if [[ "$pw" != "$confirm" ]]; then echo "  Passwords do not match" >&2; continue; fi
+    break
+  done
+  # Hash bcrypt — Docker mode hashes inside a throwaway container so the host
+  # doesn't need bun; bun mode uses the host's bun.
+  if [[ "$MODE" == "docker" ]]; then
+    ADMIN_HASH=$(docker run --rm --entrypoint bun "$IMAGE" -e "console.log(await Bun.password.hash('$pw', {algorithm: 'bcrypt'}))")
+  else
+    ADMIN_HASH=$(bun -e "console.log(await Bun.password.hash('$pw', {algorithm: 'bcrypt'}))")
+  fi
+}
+
+if [[ "$MODE" == "docker" ]]; then
+  # --- Docker install path ---
+  if ! has_docker_compose; then
+    echo "ERROR: 'docker compose' not available. Install docker + compose plugin." >&2
+    exit 1
+  fi
+  mkdir -p "$SIDECHAT_DIR"
+  cd "$SIDECHAT_DIR"
+
+  read -rp "  Server port [3000]: " PORT < /dev/tty; PORT="${PORT:-3000}"
+  read -rp "  Data directory [/var/sidechat]: " DATA_DIR < /dev/tty; DATA_DIR="${DATA_DIR:-/var/sidechat}"
+  mkdir -p "$DATA_DIR"
+  # Default PUBLIC_URL to the machine's first non-loopback IPv4
+  DETECTED_IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+  DEFAULT_URL="http://${DETECTED_IP:-localhost}:$PORT"
+  echo ""
+  echo "  Public URL — what a *new client* would curl to reach this server."
+  echo "  Use http:// for a trusted network (LAN, Tailscale). Use https:// only if you"
+  echo "  terminate TLS in front (Tailscale Serve, Caddy, Cloudflare, etc.)."
+  read -rp "  Public URL [$DEFAULT_URL]: " PUBLIC_URL < /dev/tty
+  PUBLIC_URL="${PUBLIC_URL:-$DEFAULT_URL}"
+  PUBLIC_URL="${PUBLIC_URL%/}"
+  echo ""
+  prompt_admin_creds
+
+  cat > "$SIDECHAT_DIR/docker-compose.yml" <<YAML
+services:
+  sidechat:
+    image: $IMAGE
+    container_name: sidechat
+    restart: unless-stopped
+    ports:
+      - "$PORT:3000"
+    volumes:
+      - $DATA_DIR:/var/sidechat
+    environment:
+      PORT: "3000"
+      PUBLIC_URL: "$PUBLIC_URL"
+      ADMIN_USER: "$ADMIN_USER"
+      ADMIN_PASSWORD_HASH: "$ADMIN_HASH"
+      DB_PATH: "/var/sidechat/sidechat.db"
+      ARCHIVE_DIR: "/var/sidechat/archives"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+YAML
+  chmod 600 "$SIDECHAT_DIR/docker-compose.yml"   # contains bcrypt hash
+
+  echo "  Pulling image + starting stack..."
+  ( cd "$SIDECHAT_DIR" && docker compose pull && docker compose up -d )
+
+  # Wait for health
+  for i in $(seq 1 20); do
+    if curl -fsS -m 3 "http://localhost:$PORT/health" >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+
+  echo ""
+  echo "  ╔══════════════════════════════════════════════════╗"
+  echo "  ║   SideChat is ready (Docker)                     ║"
+  echo "  ╚══════════════════════════════════════════════════╝"
+  echo ""
+  echo "  Compose:        $SIDECHAT_DIR/docker-compose.yml"
+  echo "  Admin console:  $PUBLIC_URL/admin"
+  echo "  Health check:   $PUBLIC_URL/health"
+  echo ""
+  echo "  Install a client (from any other machine):"
+  echo "    curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install/client.sh | bash -s -- $PUBLIC_URL"
+  echo ""
+  exit 0
+fi
+
+# --- Prerequisites (bun mode) ---
 
 if ! command -v git &>/dev/null; then
   echo "ERROR: git is required. Install it first:" >&2

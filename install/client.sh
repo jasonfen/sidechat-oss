@@ -20,9 +20,18 @@ if [[ -z "$SIDECHAT_URL" && -f "$SCRIPT_DIR/config" ]]; then
   SIDECHAT_URL=$(grep '^SERVER_URL=' "$SCRIPT_DIR/config" | cut -d= -f2-)
 fi
 
+# Prompt for URL if not supplied — supports the GitHub-raw install path where
+# the user curls `raw.githubusercontent.com/.../client.sh` and the server URL
+# can't be inferred from the curl target.
+if [[ -z "$SIDECHAT_URL" && -r /dev/tty && "${CLAUDECODE:-}" != "1" ]]; then
+  read -rp "Server URL (e.g. http://sidechat.local:3000): " SIDECHAT_URL < /dev/tty
+  SIDECHAT_URL="${SIDECHAT_URL%/}"
+fi
+
 if [[ -z "$SIDECHAT_URL" ]]; then
   echo "Error: Server URL required. Usage: bash client.sh <server-url>"
   echo "  Example: curl -fsSL http://your-server:3000/install/client.sh | bash -s -- http://your-server:3000"
+  echo "  Or:      curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install/client.sh | bash -s -- http://your-server:3000"
   exit 1
 fi
 
