@@ -1799,10 +1799,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     .then(function(data) { allUsers = data.users || []; })
     .catch(function() {});
 
-  // History window state. Initial load caps at 8h; older messages are
-  // fetched on demand via the calendar (clicking a date older than the
-  // current window) or scroll-to-top trigger. oldestLoadedTimestamp is
-  // the lower bound of the currently-rendered window.
+  // History window state. Initial load fetches the last 8 wall-clock hours,
+  // falling back to the 8h window ending at the most recent message when the
+  // channel's been quiet. oldestLoadedTimestamp is the lower bound of the
+  // currently-rendered window; older messages are fetched on demand via the
+  // calendar or scroll-to-top trigger.
   var oldestLoadedTimestamp = new Date(Date.now() - 8 * 3600 * 1000);
   var loadingOlder = false;
 
@@ -1831,10 +1832,17 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       .finally(function() { loadingOlder = false; });
   }
 
-  // Initial load: past 8 hours
-  fetch('/messages?since=' + encodeURIComponent(oldestLoadedTimestamp.toISOString()), { credentials: 'same-origin' })
+  // Initial load: past 8 hours (with fallback to last 8h of activity if quiet)
+  fetch('/messages?lookback_hours=8', { credentials: 'same-origin' })
     .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function(data) { data.messages.forEach(renderMessage); initialLoadDone = true; })
+    .then(function(data) {
+      data.messages.forEach(renderMessage);
+      if (data.messages.length > 0) {
+        var oldest = new Date(data.messages[0].timestamp);
+        if (oldest < oldestLoadedTimestamp) oldestLoadedTimestamp = oldest;
+      }
+      initialLoadDone = true;
+    })
     .catch(function(err) { messagesEl.innerHTML = '<div style="color:#f85149;">Failed to load messages: ' + err.message + '</div>'; });
 
   // Scroll-to-top: when the user scrolls to the top of the message list,
@@ -4101,10 +4109,14 @@ function withReceipts(msgs: Message[]) {
 // GET /messages — session or observer auth required
 // Supports ?since=<ISO> (exclusive lower bound), ?until=<ISO> (inclusive
 // upper bound), or both together for a back-window fetch (used by the chat
-// client's load-older flow). With neither, returns the last 50.
+// client's load-older flow). ?lookback_hours=<N> returns the last N wall-clock
+// hours of messages; if that window is empty (user returns after a long quiet
+// period), falls back to the N-hour window ending at the most recent message.
+// With no args, returns the last 50.
 app.get("/messages", requireSessionOrObserver, (c) => {
   const since = c.req.query("since");
   const until = c.req.query("until");
+  const lookbackHours = c.req.query("lookback_hours");
   let result: Message[];
 
   if (since || until) {
@@ -4114,6 +4126,19 @@ app.get("/messages", requireSessionOrObserver, (c) => {
       const t = new Date(m.timestamp).getTime();
       return t > sinceTs && t <= untilTs;
     });
+  } else if (lookbackHours) {
+    const hours = Number(lookbackHours);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      return c.json({ error: "lookback_hours must be a positive number" }, 400);
+    }
+    const windowMs = hours * 3600 * 1000;
+    const wallCutoff = Date.now() - windowMs;
+    result = messages.filter((m) => new Date(m.timestamp).getTime() > wallCutoff);
+    if (result.length === 0 && messages.length > 0) {
+      const latestTs = new Date(messages[messages.length - 1].timestamp).getTime();
+      const fallbackCutoff = latestTs - windowMs;
+      result = messages.filter((m) => new Date(m.timestamp).getTime() > fallbackCutoff);
+    }
   } else {
     result = messages.slice(-50);
   }
