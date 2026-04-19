@@ -39,7 +39,8 @@ db.exec(`
     token       TEXT NOT NULL UNIQUE,
     fingerprint TEXT NOT NULL,
     expires_at  TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    scope       TEXT NOT NULL DEFAULT 'full'
   );
   CREATE TABLE IF NOT EXISTS admin_sessions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +88,26 @@ try { db.exec("ALTER TABLE clients ADD COLUMN webhook_secret TEXT"); } catch {}
 try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } catch {}
 try { db.exec("ALTER TABLE clients ADD COLUMN last_known_version TEXT"); } catch {}
 try { db.exec("ALTER TABLE observers ADD COLUMN role TEXT NOT NULL DEFAULT 'observer'"); } catch {}
+try { db.exec("ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'"); } catch {}
+
+// Endpoints an MCP-scoped session (scope='mcp') is allowed to reach. Anything
+// else returns 403 with reason=scope_denied. Full-scoped sessions are
+// unrestricted. Method-path pairs; `:id` and `:fp` bind any path segment.
+const MCP_SCOPE_ALLOWED: Array<{ method: string; pattern: RegExp }> = [
+  { method: "POST",   pattern: /^\/message$/ },
+  { method: "GET",    pattern: /^\/messages$/ },
+  { method: "GET",    pattern: /^\/messages\/pending-mentions$/ },
+  { method: "POST",   pattern: /^\/messages\/[^\/]+\/read$/ },
+  { method: "POST",   pattern: /^\/messages\/[^\/]+\/engaged$/ },
+  { method: "POST",   pattern: /^\/messages\/[^\/]+\/delivered$/ },
+  { method: "GET",    pattern: /^\/users$/ },
+  { method: "GET",    pattern: /^\/version$/ },
+  { method: "GET",    pattern: /^\/health$/ },
+  { method: "GET",    pattern: /^\/events$/ },
+];
+function mcpScopeAllows(method: string, path: string): boolean {
+  return MCP_SCOPE_ALLOWED.some((r) => r.method === method && r.pattern.test(path));
+}
 
 // --- Build version ---
 // SERVER_VERSION = human-readable semver from package.json (e.g. "2.1.0").
@@ -2740,6 +2761,12 @@ async function requireSession(c: Context, next: Next) {
   ).get(token, new Date().toISOString()) as any;
   if (!session) { logEvent("session.denied", { ip: getClientIP(c), reason: "bad_bearer_or_expired", path: c.req.path }); return c.json({ error: "Invalid or expired session" }, 401); }
 
+  const scope = (session.scope ?? "full") as string;
+  if (scope === "mcp" && !mcpScopeAllows(c.req.method, c.req.path)) {
+    logEvent("session.denied", { ip: getClientIP(c), reason: "scope_denied", scope, path: c.req.path, method: c.req.method });
+    return c.json({ error: "Token scope does not permit this endpoint" }, 403);
+  }
+
   const client = db.query(
     "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
   ).get(session.fingerprint) as any;
@@ -2751,6 +2778,7 @@ async function requireSession(c: Context, next: Next) {
   );
 
   c.set("client", client);
+  c.set("sessionScope", scope);
   await next();
 }
 
@@ -2762,6 +2790,11 @@ async function requirePostSession(c: Context, next: Next) {
       "SELECT * FROM sessions WHERE token = ? AND expires_at > ?"
     ).get(token, new Date().toISOString()) as any;
     if (botSession) {
+      const scope = (botSession.scope ?? "full") as string;
+      if (scope === "mcp" && !mcpScopeAllows(c.req.method, c.req.path)) {
+        logEvent("session.denied", { ip: getClientIP(c), reason: "scope_denied", scope, path: c.req.path, method: c.req.method });
+        return c.json({ error: "Token scope does not permit this endpoint" }, 403);
+      }
       const client = db.query(
         "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
       ).get(botSession.fingerprint) as any;
@@ -2769,6 +2802,7 @@ async function requirePostSession(c: Context, next: Next) {
         if (!client.can_post) return c.json({ error: "Client not authorized to post" }, 403);
         c.set("client", client);
         c.set("sender", client.name);
+        c.set("sessionScope", scope);
         await next();
         return;
       }
@@ -2805,6 +2839,11 @@ async function requireSessionOrObserver(c: Context, next: Next) {
       "SELECT * FROM sessions WHERE token = ? AND expires_at > ?"
     ).get(token, new Date().toISOString()) as any;
     if (botSession) {
+      const scope = (botSession.scope ?? "full") as string;
+      if (scope === "mcp" && !mcpScopeAllows(c.req.method, c.req.path)) {
+        logEvent("session.denied", { ip: getClientIP(c), reason: "scope_denied", scope, path: c.req.path, method: c.req.method });
+        return c.json({ error: "Token scope does not permit this endpoint" }, 403);
+      }
       const client = db.query(
         "SELECT * FROM clients WHERE fingerprint = ? AND status = 'active'"
       ).get(botSession.fingerprint) as any;
@@ -2812,6 +2851,7 @@ async function requireSessionOrObserver(c: Context, next: Next) {
         db.run("UPDATE clients SET last_seen = ?, last_ip = ? WHERE fingerprint = ?",
           [new Date().toISOString(), getClientIP(c), botSession.fingerprint]);
         c.set("client", client);
+        c.set("sessionScope", scope);
         await next();
         return;
       }
@@ -3012,14 +3052,16 @@ app.post("/auth/token", async (c) => {
   // Mark nonce as used
   db.run("UPDATE nonces SET used = 1 WHERE value = ?", [body.nonce]);
 
-  // Create session
+  // Create session. Optional ?scope=mcp narrows the token to the MCP endpoint
+  // whitelist (see MCP_SCOPE_ALLOWED). Default scope is 'full'.
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_TTL_HOURS * 3600 * 1000);
+  const scope = c.req.query("scope") === "mcp" ? "mcp" : "full";
 
   db.run(
-    "INSERT INTO sessions (token, fingerprint, expires_at, created_at) VALUES (?, ?, ?, ?)",
-    [token, body.fingerprint, expiresAt.toISOString(), now.toISOString()]
+    "INSERT INTO sessions (token, fingerprint, expires_at, created_at, scope) VALUES (?, ?, ?, ?, ?)",
+    [token, body.fingerprint, expiresAt.toISOString(), now.toISOString(), scope]
   );
 
   const clientVersion = c.req.header("X-SideChat-Client-Version") ?? null;
@@ -3027,8 +3069,8 @@ app.post("/auth/token", async (c) => {
     [now.toISOString(), getClientIP(c), clientVersion, body.fingerprint]);
 
   authAttemptsTotal++;
-  logEvent("auth.token.issued", { fingerprint: body.fingerprint, username: client.name, ip, client_version: clientVersion });
-  return c.json({ token, expires_at: expiresAt.toISOString() });
+  logEvent("auth.token.issued", { fingerprint: body.fingerprint, username: client.name, ip, client_version: clientVersion, scope });
+  return c.json({ token, expires_at: expiresAt.toISOString(), scope });
 });
 
 // --- Admin Pages ---
@@ -4156,6 +4198,40 @@ app.get("/messages", requireSessionOrObserver, (c) => {
 // GET /messages/all — session or observer auth required
 app.get("/messages/all", requireSessionOrObserver, (c) => {
   return c.json({ messages: withReceipts(messages), count: messages.length });
+});
+
+// GET /messages/pending-mentions — bot auth required (requireSession, which
+// also handles the scope=mcp enforcement). Returns @-mentions for the
+// authenticated bot that the bot has NOT yet marked read. Side effect: every
+// returned message is marked `engaged` for this bot before the response is
+// sent (idempotent — repeat calls are no-ops). This is the per-contract
+// behavior of the MCP `list_pending_mentions()` tool, but the endpoint is
+// generic enough to serve any client that wants "what do I still owe a
+// reply on?" semantics.
+app.get("/messages/pending-mentions", requireSession, (c) => {
+  const client = c.get("client") as any;
+  const me = client.name as string;
+  const pending = messages.filter((m) => {
+    if (!m.mentions.includes(me)) return false;
+    if (m.sender === me) return false; // don't self-mention-deliver
+    const readSet = readReceipts.get(m.id);
+    return !readSet || !readSet.has(me);
+  });
+  // Side effect: auto-mark engaged. Idempotent via Set semantics.
+  let newEngagements = 0;
+  for (const m of pending) {
+    if (!engagedReceipts.has(m.id)) engagedReceipts.set(m.id, new Set());
+    const set = engagedReceipts.get(m.id)!;
+    if (!set.has(me)) {
+      set.add(me);
+      newEngagements++;
+      broadcastEvent("engaged", { id: m.id, engager: me });
+    }
+  }
+  if (newEngagements > 0) {
+    logEvent("message.engaged.batch", { engager: me, count: newEngagements });
+  }
+  return c.json({ messages: withReceipts(pending), count: pending.length });
 });
 
 // GET /files-list — enriched file listing for the sidebar files panel

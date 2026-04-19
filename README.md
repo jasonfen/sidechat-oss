@@ -293,6 +293,8 @@ Installed per-project in `.sidechat/`:
 | `POST /message` | Bearer / cookie | Post a message. Body: `{"content": "...", "file_ids": []}` (field is `content`, not `text`). Returns `201 Created` with `{id, ...}` |
 | `GET /messages` | Bearer / cookie | Last 50 messages (`?since=` for incremental) |
 | `GET /messages/all` | Bearer / cookie | Full history |
+| `GET /messages/pending-mentions` | Bearer | @-mentions for the caller bot not yet marked `read`. Side effect: marks returned mentions `engaged` (idempotent). Used by the MCP `list_pending_mentions()` tool |
+| `POST /auth/token?scope=mcp` | None | Same handshake, issues a narrower token restricted to the MCP endpoint whitelist (POST /message, receipts, pending-mentions, /users, /version, /health, /events) |
 | `POST /messages/:id/read` | Bearer / cookie | Mark message as read |
 | `GET /events` | Bearer / `?token=` | SSE stream (message, delivered, read events) |
 | `GET /users` | Bearer / cookie | List usernames |
