@@ -506,6 +506,7 @@ interface Message {
   content: string;
   mentions: string[];
   files?: FileAttachment[];
+  reply_to_id?: number | null;
 }
 
 // 2.4.0 retired: the in-memory `messages` array and the
@@ -615,9 +616,9 @@ function todayLogPath(): string {
 async function writeArchive() {
   const newMessages = db
     .query(
-      "SELECT id, timestamp, sender, content FROM messages WHERE id > ? ORDER BY id"
+      "SELECT id, timestamp, sender, content, reply_to_id FROM messages WHERE id > ? ORDER BY id"
     )
-    .all(lastArchivedId) as Array<{ id: number; timestamp: string; sender: string; content: string }>;
+    .all(lastArchivedId) as Array<{ id: number; timestamp: string; sender: string; content: string; reply_to_id: number | null }>;
   if (newMessages.length === 0) return;
 
   const filepath = todayLogPath();
@@ -631,7 +632,8 @@ async function writeArchive() {
 
   for (const msg of newMessages) {
     const time = msg.timestamp.split("T")[1]?.split(".")[0] ?? msg.timestamp;
-    lines.push(`**[${time}] ${msg.sender}**`);
+    const replyPrefix = msg.reply_to_id ? ` ↪#${msg.reply_to_id}` : "";
+    lines.push(`**[${time}] ${msg.sender}**${replyPrefix}`);
     lines.push(msg.content);
     lines.push("");
     lines.push("---");
@@ -1002,6 +1004,21 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   }
   .msg-header {
     margin-bottom: 2px;
+  }
+  .msg-reply-chip {
+    font-size: 0.75em;
+    color: #8b949e;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-bottom: 2px;
+    display: inline-block;
+    cursor: pointer;
+  }
+  .msg-reply-chip:hover {
+    color: #58a6ff;
+    border-color: #388bfd;
   }
   .msg-time {
     color: #484f58;
@@ -1782,11 +1799,28 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       });
       filesHtml += '</div>';
     }
+    var replyChipHtml = '';
+    if (msg.reply_to_id) {
+      replyChipHtml = '<div class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 replied to #' + msg.reply_to_id + '</div>';
+    }
     div.innerHTML =
+      replyChipHtml +
       '<div class="msg-header"><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       filesHtml +
       '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
+    var chip = div.querySelector('.msg-reply-chip');
+    if (chip) {
+      chip.addEventListener('click', function() {
+        var targetId = chip.getAttribute('data-reply-to');
+        var target = messagesEl.querySelector('[data-msg-id="' + targetId + '"]');
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.style.background = '#1f2937';
+          setTimeout(function() { target.style.background = ''; }, 1200);
+        }
+      });
+    }
     var mdPreviews = div.querySelectorAll('details.md-preview');
     for (var i = 0; i < mdPreviews.length; i++) attachMdPreview(mdPreviews[i]);
     messagesEl.appendChild(div);
@@ -4012,12 +4046,22 @@ const recentMessages = new Map<string, number>(); // "sender:content" -> timesta
 const DEDUP_WINDOW_MS = 5000; // 5 seconds
 
 app.post("/message", requirePostSession, async (c) => {
-  const body = await c.req.json<{ content: string; file_ids?: string[] }>();
+  const body = await c.req.json<{ content: string; file_ids?: string[]; reply_to_id?: number | null }>();
   if (!body.content || typeof body.content !== "string") {
     return c.json({ error: "Missing content" }, 400);
   }
   if (body.content.length > 4096) {
     return c.json({ error: "Message too long (max 4096 chars)" }, 400);
+  }
+
+  let replyToId: number | null = null;
+  if (body.reply_to_id != null) {
+    if (!Number.isInteger(body.reply_to_id) || body.reply_to_id <= 0) {
+      return c.json({ error: "reply_to_id must be a positive integer" }, 400);
+    }
+    const parent = db.query("SELECT 1 FROM messages WHERE id = ?").get(body.reply_to_id);
+    if (!parent) return c.json({ error: `reply_to_id ${body.reply_to_id} not found` }, 404);
+    replyToId = body.reply_to_id;
   }
 
   const sender = c.get("sender") as string;
@@ -4060,9 +4104,9 @@ app.post("/message", requirePostSession, async (c) => {
     content: body.content,
     mentions: parseMentions(body.content),
     files,
+    reply_to_id: replyToId,
   };
 
-  // Link files to this message
   if (files) {
     for (const f of files) {
       db.run("UPDATE files SET message_id = ? WHERE id = ?", [msg.id, f.id]);
@@ -4071,7 +4115,7 @@ app.post("/message", requirePostSession, async (c) => {
 
   db.run(
     "INSERT INTO messages (id, timestamp, sender, content, mentions, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
-    [msg.id, msg.timestamp, msg.sender, msg.content, JSON.stringify(msg.mentions), null]
+    [msg.id, msg.timestamp, msg.sender, msg.content, JSON.stringify(msg.mentions), replyToId]
   );
   messagesPostedTotal++;
   broadcastEvent("message", msg);
@@ -4218,11 +4262,8 @@ function dbRowsToMessages(rows: MessageRow[]): Message[] {
     sender: r.sender,
     content: r.content,
     mentions: JSON.parse(r.mentions),
-    // Always set files: [] for parity with the pre-migration in-memory shape
-    // (POST /message assigned `files` unconditionally, even when empty).
-    // Omitting the key would flip an existence-check for any client
-    // distinguishing `hasOwnProperty('files')` vs `.files.length === 0`.
     files: filesByMsg.get(r.id) ?? [],
+    reply_to_id: r.reply_to_id,
   }));
 }
 

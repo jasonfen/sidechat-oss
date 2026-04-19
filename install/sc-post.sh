@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: ./sc-post.sh "message"                  (message as argument)
 #        ./sc-post.sh --file path/to/file "msg"   (attach file(s) to message)
+#        ./sc-post.sh --reply-to <id> "msg"       (thread as reply to message id)
 #        ./sc-post.sh                             (reads from .sidechat/message.txt)
 #        echo "msg" | ./sc-post.sh -              (reads from stdin)
 
@@ -18,6 +19,7 @@ source "$CONFIG"
 # Parse arguments
 FILES=()
 MSG=""
+REPLY_TO=""
 POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
@@ -28,6 +30,18 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       FILES+=("$2")
+      shift 2
+      ;;
+    --reply-to)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --reply-to requires a message id" >&2
+        exit 1
+      fi
+      if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: --reply-to requires a positive integer" >&2
+        exit 1
+      fi
+      REPLY_TO="$2"
       shift 2
       ;;
     *)
@@ -83,6 +97,9 @@ if [[ ${#FILE_IDS[@]} -gt 0 ]]; then
   PAYLOAD=$(jq -n --argjson file_ids "$FILE_IDS_JSON" --arg content "$MSG" '{ content: $content, file_ids: $file_ids }')
 else
   PAYLOAD=$(jq -n --arg content "$MSG" '{ content: $content }')
+fi
+if [[ -n "$REPLY_TO" ]]; then
+  PAYLOAD=$(echo "$PAYLOAD" | jq --argjson rid "$REPLY_TO" '. + { reply_to_id: $rid }')
 fi
 
 do_post() {

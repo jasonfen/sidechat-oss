@@ -75,12 +75,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "post",
       description:
-        "Post a message to SideChat as the authenticated bot. No mention tracking touched.",
+        "Post a message to SideChat as the authenticated bot. Optional `reply_to_id` threads the post to an existing message (UI renders a '↳ replied to #ID' chip).",
       inputSchema: {
         type: "object",
         required: ["text"],
         properties: {
           text: { type: "string", description: "Message body (Markdown OK)." },
+          reply_to_id: {
+            type: "number",
+            description: "Optional message id to thread this reply under. Server validates the parent exists (404 on unknown id).",
+          },
         },
       },
     },
@@ -102,7 +106,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "post_reply",
       description:
-        "Reply to a specific mention. Posts the reply message then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read).",
+        "Reply to a specific mention. Posts the reply message threaded to the mention (reply_to_id set), then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read).",
       inputSchema: {
         type: "object",
         required: ["mention_id", "text"],
@@ -124,9 +128,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (name === "post") {
     const text = String((args as any).text ?? "");
     if (!text) throw new Error("post: `text` is required");
+    const rawReply = (args as any).reply_to_id;
+    const body: Record<string, unknown> = { content: text };
+    if (rawReply != null) {
+      const n = Number(rawReply);
+      if (!Number.isInteger(n) || n <= 0) {
+        throw new Error("post: `reply_to_id` must be a positive integer");
+      }
+      body.reply_to_id = n;
+    }
     const posted = await scJson<{ id: number; timestamp: string }>("/message", {
       method: "POST",
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify(body),
     });
     return {
       content: [
@@ -163,7 +176,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     // failure the mention stays in whatever state it was.
     const posted = await scJson<{ id: number; timestamp: string }>("/message", {
       method: "POST",
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify({ content: text, reply_to_id: mentionId }),
     });
     await scJson(`/messages/${mentionId}/read`, { method: "POST" });
     return {
