@@ -1407,7 +1407,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
 </head>
 <body>
 <div id="sidebar-backdrop"></div>
-<div id="app" style="display:flex;flex-direction:row;height:100vh;">
+<div id="app" style="display:flex;flex-direction:row;height:100vh;flex:1;min-width:0;width:100%;">
   <div id="sidebar">
     <div id="sidebar-header">
       <span id="sidebar-label">Calendar</span>
