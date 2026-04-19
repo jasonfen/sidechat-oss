@@ -119,25 +119,37 @@ fi
 BUN_BIN="$(command -v bun)"
 MCP_ENTRY="$MCP_SRC_DIR/src/server.ts"
 
-# Construct the command the operator should run. Use --env flags so the token
+# Construct the command the operator should run. Use -e flags so the token
 # never touches a file on disk outside the caller's invocation + Claude
-# Code's own MCP config.
+# Code's own MCP config. `--` separates Claude Code's flags from the
+# subprocess command line (required by `claude mcp add`).
 CMD=(claude mcp add "$MCP_NAME" -s user
-     --env "SIDECHAT_URL=$SERVER_URL"
-     --env "SIDECHAT_TOKEN=$TOKEN"
-     "$BUN_BIN" run "$MCP_ENTRY")
+     -e "SIDECHAT_URL=$SERVER_URL"
+     -e "SIDECHAT_TOKEN=$TOKEN"
+     -- "$BUN_BIN" run "$MCP_ENTRY")
 
 echo ""
 echo "  Minted scope=mcp token (expires $EXPIRES)."
 echo ""
 echo "  Register the MCP server with Claude Code:"
 echo ""
-printf '    %q ' "${CMD[@]}"
-echo ""
+# Build a clean copy-pasteable one-liner: quote each arg with %q only when it
+# needs it. We do this manually to avoid printf %q's aggressive backslashing
+# on simple args.
+printable=""
+for a in "${CMD[@]}"; do
+  case "$a" in
+    *[!a-zA-Z0-9_/.:=,-]*|"") printable+=" $(printf '%q' "$a")" ;;
+    *) printable+=" $a" ;;
+  esac
+done
+echo "   $printable"
 echo ""
 
 if $APPLY; then
   echo "  --apply set — running the above now..."
+  # Remove any previous registration so --apply is idempotent.
+  claude mcp remove "$MCP_NAME" -s user >/dev/null 2>&1 || true
   "${CMD[@]}"
   echo ""
   echo "  Done. Verify with: claude mcp list"
