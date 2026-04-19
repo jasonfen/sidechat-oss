@@ -835,33 +835,28 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     letter-spacing: 0.8px;
     border-bottom: 1px solid #21262d;
     flex-shrink: 0;
+  }
+  #files-tabs {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
+    border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
   }
-  #files-group-select {
-    background: #0d1117;
-    color: #c9d1d9;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    font-size: 10px;
-    padding: 2px 4px;
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 400;
+  .files-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    color: #484f58;
+    font: inherit;
+    font-size: 11px;
+    padding: 6px 4px;
     cursor: pointer;
+    border-bottom: 2px solid transparent;
   }
-  .files-group-header {
-    padding: 6px 14px 2px;
-    font-size: 10px;
-    font-weight: 600;
-    color: #6e7681;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-top: 1px solid #21262d;
+  .files-tab:hover { color: #c9d1d9; }
+  .files-tab.active {
+    color: #c9d1d9;
+    border-bottom-color: #58a6ff;
   }
-  .files-group-header:first-child { border-top: none; }
   #files-list {
     overflow-y: auto;
     padding: 4px 0;
@@ -1429,13 +1424,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       <div id="cal-grid"></div>
     </div>
     <div id="files-panel">
-      <div id="files-header">
-        <span>Files</span>
-        <select id="files-group-select" title="Group files by">
-          <option value="flat">flat</option>
-          <option value="type">by type</option>
-          <option value="sender">by sender</option>
-        </select>
+      <div id="files-header">Files</div>
+      <div id="files-tabs">
+        <button class="files-tab active" data-tab="to-me">to me</button>
+        <button class="files-tab" data-tab="sent">sent</button>
+        <button class="files-tab" data-tab="other">other</button>
       </div>
       <div id="files-list"></div>
     </div>
@@ -1690,15 +1683,6 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
     return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
   }
-  function fileType(filename) {
-    var n = (filename || '').toLowerCase();
-    if (/\.(md|markdown)$/.test(n)) return 'markdown';
-    if (/\.(txt|log|csv|text)$/.test(n)) return 'text';
-    if (/\.(png|jpe?g|gif|webp|svg|bmp)$/.test(n)) return 'image';
-    if (/\.pdf$/.test(n)) return 'pdf';
-    return 'other';
-  }
-  var TYPE_ORDER = ['markdown', 'text', 'image', 'pdf', 'other'];
   function appendFileRow(container, f) {
     var row = document.createElement('div');
     row.className = 'file-row';
@@ -1732,39 +1716,30 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     });
     container.appendChild(row);
   }
+  function filterFilesByTab(files, tab) {
+    return files.filter(function(f) {
+      var mentions = f.mentions || [];
+      var sentToMe = mentions.indexOf(SC_USER) !== -1;
+      var isSender = f.uploader === SC_USER;
+      if (tab === 'to-me') return sentToMe;
+      if (tab === 'sent') return isSender;
+      return !sentToMe && !isSender; // 'other'
+    });
+  }
   function renderFilesPanel(files) {
     filesListEl.innerHTML = '';
-    if (!files || files.length === 0) {
+    var tab = localStorage.getItem('sc-files-tab') || 'to-me';
+    var filtered = filterFilesByTab(files || [], tab);
+    if (filtered.length === 0) {
       var e = document.createElement('div');
       e.className = 'empty';
-      e.textContent = 'No files yet';
+      e.textContent = tab === 'to-me' ? 'No files sent to you'
+                    : tab === 'sent' ? 'You haven\\u2019t sent any files'
+                    : 'No other files';
       filesListEl.appendChild(e);
       return;
     }
-    var mode = localStorage.getItem('sc-files-group') || 'flat';
-    if (mode === 'flat') {
-      files.forEach(function(f) { appendFileRow(filesListEl, f); });
-      return;
-    }
-    var groups = {};
-    var keyOrder = [];
-    files.forEach(function(f) {
-      var k = mode === 'type' ? fileType(f.filename) : f.uploader;
-      if (!groups[k]) { groups[k] = []; keyOrder.push(k); }
-      groups[k].push(f);
-    });
-    if (mode === 'type') {
-      keyOrder.sort(function(a, b) { return TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b); });
-    } else {
-      keyOrder.sort();
-    }
-    keyOrder.forEach(function(k) {
-      var hdr = document.createElement('div');
-      hdr.className = 'files-group-header';
-      hdr.textContent = k + ' (' + groups[k].length + ')';
-      filesListEl.appendChild(hdr);
-      groups[k].forEach(function(f) { appendFileRow(filesListEl, f); });
-    });
+    filtered.forEach(function(f) { appendFileRow(filesListEl, f); });
   }
   function refreshFiles() {
     fetch('/files-list?token=' + encodeURIComponent(SC_TOKEN))
@@ -1773,16 +1748,18 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       .catch(function(){});
   }
   window.__refreshFiles = refreshFiles;
-  // Restore + wire the files grouping selector
-  var filesGroupSelect = document.getElementById('files-group-select');
-  if (filesGroupSelect) {
-    var savedMode = localStorage.getItem('sc-files-group') || 'flat';
-    filesGroupSelect.value = savedMode;
-    filesGroupSelect.addEventListener('change', function() {
-      localStorage.setItem('sc-files-group', filesGroupSelect.value);
+  // Restore + wire the files tabs
+  var filesTabs = document.querySelectorAll('.files-tab');
+  var savedTab = localStorage.getItem('sc-files-tab') || 'to-me';
+  filesTabs.forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-tab') === savedTab);
+    t.addEventListener('click', function() {
+      var tab = t.getAttribute('data-tab');
+      localStorage.setItem('sc-files-tab', tab);
+      filesTabs.forEach(function(other) { other.classList.toggle('active', other === t); });
       refreshFiles();
     });
-  }
+  });
   refreshFiles();
 
   function openMdOverlay(fileId, filename, mode) {
