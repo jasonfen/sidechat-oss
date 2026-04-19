@@ -1017,6 +1017,33 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   .msg {
     margin-bottom: 16px;
   }
+  .msg-wrapper {
+    /* container for one msg + its descendants (nested .msg-wrappers) */
+  }
+  .msg-children {
+    margin-left: 24px;
+    padding-left: 8px;
+    border-left: 2px solid #21262d;
+  }
+  .msg-children:empty {
+    display: none;
+  }
+  .msg-wrapper.collapsed > .msg-children {
+    display: none;
+  }
+  .collapse-caret {
+    display: inline-block;
+    width: 14px;
+    color: #8b949e;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.85em;
+    margin-right: 2px;
+  }
+  .collapse-caret:hover { color: #58a6ff; }
+  .msg-wrapper:not(:has(.msg-children > .msg-wrapper)) > .msg .collapse-caret {
+    visibility: hidden;
+  }
   .msg-header {
     margin-bottom: 2px;
   }
@@ -1843,7 +1870,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var d = new Date(msg.timestamp);
     var pad2 = function(n) { return n < 10 ? '0' + n : '' + n; };
     var dateKey = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
-    if (dateKey !== lastRenderedDate) {
+    var isRoot = !msg.reply_to_id;
+    if (isRoot && dateKey !== lastRenderedDate) {
       lastRenderedDate = dateKey;
       var divider = document.createElement('div');
       divider.className = 'date-divider';
@@ -1904,7 +1932,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     actionsHtml += '</div>';
     div.innerHTML =
       replyChipHtml +
-      '<div class="msg-header"><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
+      '<div class="msg-header"><span class="collapse-caret" data-target-msg-id="' + msg.id + '">\\u25BE</span><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       filesHtml +
       actionsHtml +
@@ -1932,6 +1960,21 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         }
       });
     }
+    var caret = div.querySelector('.collapse-caret');
+    if (caret) {
+      // Restore persisted collapse state from localStorage
+      var collapseKey = 'sc-collapsed-' + msg.id;
+      if (localStorage.getItem(collapseKey) === '1') {
+        wrapper.classList.add('collapsed');
+        caret.textContent = '\u25B8';
+      }
+      caret.addEventListener('click', function() {
+        var isCollapsed = wrapper.classList.toggle('collapsed');
+        caret.textContent = isCollapsed ? '\u25B8' : '\u25BE';
+        if (isCollapsed) localStorage.setItem(collapseKey, '1');
+        else localStorage.removeItem(collapseKey);
+      });
+    }
     var replyBtn = div.querySelector('.msg-reply-btn');
     if (replyBtn) {
       replyBtn.addEventListener('click', function() {
@@ -1954,7 +1997,26 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     }
     var mdPreviews = div.querySelectorAll('details.md-preview');
     for (var i = 0; i < mdPreviews.length; i++) attachMdPreview(mdPreviews[i]);
-    messagesEl.appendChild(div);
+
+    // Threaded tree insert: wrap msg in .msg-wrapper with a .msg-children
+    // container; append to parent's children container when a parent wrapper
+    // exists, else append at the top-level feed. Collapse caret shows only
+    // when at least one descendant is present (:has(...) CSS rule above).
+    var wrapper = document.createElement('div');
+    wrapper.className = 'msg-wrapper';
+    wrapper.setAttribute('data-wrapper-for', msg.id);
+    wrapper.appendChild(div);
+    var childrenContainer = document.createElement('div');
+    childrenContainer.className = 'msg-children';
+    wrapper.appendChild(childrenContainer);
+    var parentWrapper = msg.reply_to_id
+      ? messagesEl.querySelector('.msg-wrapper[data-wrapper-for="' + msg.reply_to_id + '"]')
+      : null;
+    if (parentWrapper) {
+      parentWrapper.querySelector('.msg-children').appendChild(wrapper);
+    } else {
+      messagesEl.appendChild(wrapper);
+    }
     readObserver.observe(div);
     if (!documentVisible || userScrolled) addUnreadMention(msg);
     if (!userScrolled) messagesEl.scrollTop = messagesEl.scrollHeight;
