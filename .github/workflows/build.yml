@@ -18,8 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute short SHA
-        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+      - name: Compute short SHA + version
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
 
       - uses: docker/setup-buildx-action@v3
 
@@ -36,6 +38,7 @@ jobs:
           tags: |
             ghcr.io/jasonfen/sidechat-oss:latest
             ghcr.io/jasonfen/sidechat-oss:sha-${{ env.SHORT_SHA }}
+            ghcr.io/jasonfen/sidechat-oss:v${{ env.VERSION }}
           build-args: |
             BUILD_SHA=${{ env.SHORT_SHA }}
           cache-from: type=gha
