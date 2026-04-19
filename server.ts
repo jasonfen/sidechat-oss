@@ -1520,7 +1520,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   function setReplyingTo(id, sender, content) {
     replyingToId = id;
     var preview = content.length > 80 ? content.slice(0, 80) + '\u2026' : content;
-    replyingToText.textContent = 'Replying to #' + id + ' from ' + sender + ': ' + preview;
+    replyingToText.textContent = 'Replying to ' + sender + ': ' + preview;
     replyingToBar.classList.add('active');
     msgInput.focus();
   }
@@ -2044,7 +2044,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       : false;
     var showChip = msg.reply_to_id && !parentInDom;
     var replyChipHtml = showChip
-      ? '<span class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 #' + msg.reply_to_id + '</span>'
+      ? '<span class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '" title="Reply to an earlier message (out of view)">\\u21B3 reply</span>'
       : '';
     var replyChipPreviewHtml = showChip
       ? '<div class="msg-reply-chip-preview" id="preview-' + msg.id + '"></div>'
