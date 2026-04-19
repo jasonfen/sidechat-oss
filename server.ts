@@ -151,11 +151,13 @@ try { SERVER_SHA = (await Bun.file(`${import.meta.dir}/version.txt`).text()).tri
 // surface can evolve without touching MCP.
 const MCP_SCHEMA_REV = 1;
 
-// MCP_EXPECTED_CLIENT_BUILD_SHA = the commit-sha of mcp/src/server.ts that
-// this server version was released against. When a client's build-sha
-// diverges from this, their probe logs a drift warning.
-// Bumped alongside any mcp/src/server.ts change that lands on main.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "82e7bff";
+// MCP_EXPECTED_CLIENT_BUILD_SHA is the release-tag of mcp/src/server.ts that
+// this server release pairs with. When a client's CLIENT_BUILD_SHA diverges
+// from this, the version probe logs a drift warning. Intentionally a release
+// tag (not a commit sha): handshake is anchored at release boundaries where
+// operators reinstall MCP. Bump at release time in lockstep with the client's
+// CLIENT_BUILD_SHA.
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.5.0-dev";
 
 // --- Config from env ---
 

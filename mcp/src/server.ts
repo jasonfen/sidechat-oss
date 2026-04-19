@@ -21,6 +21,15 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+// CLIENT_BUILD_SHA is the release-tag this MCP client was built against.
+// Compared at probe-time against the server's MCP_EXPECTED_CLIENT_BUILD_SHA
+// to surface local-disk drift. Intentionally a release tag, not a commit sha:
+// the handshake is anchored at release boundaries where operators reinstall
+// MCP via install-mcp.sh; intra-release commits may move the file without
+// drifting this const. Bump at release time, in lockstep with the server's
+// MCP_EXPECTED_CLIENT_BUILD_SHA.
+const CLIENT_BUILD_SHA = "2.5.0-dev";
+
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
 
@@ -56,6 +65,27 @@ async function scJson<T = unknown>(path: string, init: RequestInit = {}): Promis
   const res = await scFetch(path, init);
   if (!res.ok) {
     const body = await res.text().catch(() => "<no body>");
+    // 404 on an endpoint this MCP build expects = likely the REST surface
+    // moved out from under us. Enrich the error so the caller sees a concrete
+    // repair path instead of a bare status.
+    if (res.status === 404) {
+      let serverExpects = "unknown";
+      try {
+        const v = await fetch(`${SIDECHAT_URL}/install/mcp-version`).then((r) => r.json());
+        serverExpects = v.expected_client_build_sha ?? "unknown";
+      } catch {}
+      throw new Error(
+        JSON.stringify({
+          error: "tool_gone_or_endpoint_moved",
+          hint: "Your MCP client may be out of date. Run install-mcp.sh and restart your Claude Code session.",
+          path,
+          method: init.method ?? "GET",
+          your_build: CLIENT_BUILD_SHA,
+          server_expects: serverExpects,
+          server_body: body.slice(0, 200),
+        })
+      );
+    }
     throw new Error(
       `${init.method ?? "GET"} ${path} → ${res.status}: ${body.slice(0, 200)}`
     );
@@ -102,6 +132,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
       },
+    },
+    {
+      name: "version",
+      description:
+        "Probe the sidechat server's MCP version surface. Returns the server_version, mcp_schema_rev, client_build_sha (this client's baked-in commit sha), and expected_client_build_sha (what the server expects this client to be on). Divergence between the last two means re-run install-mcp.sh and restart the Claude Code session. Takes no args.",
+      inputSchema: { type: "object", properties: {} },
     },
     {
       name: "post_reply",
@@ -166,6 +202,30 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
 
+  if (name === "version") {
+    const v = await scJson<{ server_version: string; schema_rev: number; expected_client_build_sha: string }>(
+      "/install/mcp-version"
+    );
+    const drift = v.expected_client_build_sha !== CLIENT_BUILD_SHA;
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            server_version: v.server_version,
+            schema_rev: v.schema_rev,
+            client_build_sha: CLIENT_BUILD_SHA,
+            expected_client_build_sha: v.expected_client_build_sha,
+            drift,
+            hint: drift
+              ? "client_build_sha != expected — run install-mcp.sh and restart the Claude Code session."
+              : "in sync",
+          }),
+        },
+      ],
+    };
+  }
+
   if (name === "post_reply") {
     const mentionId = Number((args as any).mention_id);
     const text = String((args as any).text ?? "");
@@ -196,10 +256,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   throw new Error(`Unknown tool: ${name}`);
 });
 
+async function probeAndLogDrift() {
+  try {
+    const v = await fetch(`${SIDECHAT_URL}/install/mcp-version`).then((r) => r.json()) as
+      | { server_version: string; schema_rev: number; expected_client_build_sha: string }
+      | null;
+    if (!v) return;
+    const drift = v.expected_client_build_sha !== CLIENT_BUILD_SHA;
+    process.stderr.write(
+      `[sidechat-mcp] server=${v.server_version} schema_rev=${v.schema_rev} ` +
+      `client=${CLIENT_BUILD_SHA} expected=${v.expected_client_build_sha}` +
+      (drift ? " — DRIFT: run install-mcp.sh and restart the session.\n" : " — in sync\n")
+    );
+  } catch (err) {
+    process.stderr.write(`[sidechat-mcp] version probe failed (non-fatal): ${err}\n`);
+  }
+}
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write(`[sidechat-mcp] connected to ${SIDECHAT_URL}\n`);
+  await probeAndLogDrift();
 }
 
 main().catch((err) => {
