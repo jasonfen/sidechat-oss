@@ -79,6 +79,31 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- 2.4.0 scaffolding: messages + receipts tables. Reads + writes still flow
+  -- through the in-memory messages array and receipt Maps until the read-path
+  -- migration lands in a subsequent commit. Creating the tables now + running
+  -- the one-time backfill at startup lets us verify the migration shape
+  -- without touching the runtime hot path.
+  CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    sender      TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    mentions    TEXT NOT NULL DEFAULT '[]',
+    reply_to_id INTEGER REFERENCES messages(id)
+  );
+  CREATE INDEX IF NOT EXISTS messages_timestamp ON messages(timestamp);
+  CREATE INDEX IF NOT EXISTS messages_reply_to_id ON messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS message_receipts (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    username   TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK(kind IN ('delivered', 'engaged', 'read')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, username, kind)
+  );
+  CREATE INDEX IF NOT EXISTS message_receipts_msg_kind ON message_receipts(message_id, kind);
 `);
 
 // --- Schema migrations ---
@@ -655,6 +680,86 @@ try {
 } catch (err) {
   console.error(`Snapshot rehydration failed: ${err}`);
 }
+
+// 2.4.0-dev SQLite backfill. Additive: populates the `messages` +
+// `message_receipts` tables from the rehydrated in-memory state if the DB is
+// empty. Reads + writes continue flowing through the in-memory array until
+// a subsequent commit migrates those call sites. The backfill is idempotent
+// (empty-table guard), runs in a single transaction, and renames the source
+// snapshot to `messages.json.pre-2.4.0-migration` AFTER COMMIT so a
+// pre-COMMIT crash leaves the snapshot in place for retry.
+async function runMessageBackfillIfNeeded() {
+  try {
+    const existing = db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number };
+    if (existing.n > 0) return; // already backfilled — idempotent no-op
+    if (messages.length === 0) return; // nothing to backfill (fresh install)
+
+    const start = Date.now();
+    const insertMsg = db.prepare(
+      "INSERT INTO messages (id, timestamp, sender, content, mentions, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const insertReceipt = db.prepare(
+      "INSERT INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)"
+    );
+
+    const tx = db.transaction(() => {
+      for (const m of messages) {
+        const mentionsJson = JSON.stringify((m as any).mentions ?? []);
+        insertMsg.run(
+          m.id,
+          m.timestamp,
+          m.sender,
+          m.content,
+          mentionsJson,
+          (m as any).reply_to_id ?? null
+        );
+      }
+      const backfillTs = new Date().toISOString();
+      for (const [msgId, users] of readReceipts) {
+        for (const u of users) insertReceipt.run(msgId, u, "read", backfillTs);
+      }
+      for (const [msgId, users] of deliveryReceipts) {
+        for (const u of users) insertReceipt.run(msgId, u, "delivered", backfillTs);
+      }
+      for (const [msgId, users] of engagedReceipts) {
+        for (const u of users) insertReceipt.run(msgId, u, "engaged", backfillTs);
+      }
+    });
+
+    tx(); // BEGIN + INSERTs + COMMIT happen synchronously inside bun:sqlite's transaction()
+
+    // Only after COMMIT do we rename the snapshot to mark backfill complete.
+    // If this rename fails (disk full, permissions), the next boot sees non-
+    // empty messages table + snapshot present: the empty-table guard skips
+    // re-insertion and rename retries on next graceful shutdown's snapshot
+    // rotation. No data loss either way.
+    try {
+      const snapshotFile = Bun.file(SNAPSHOT_PATH);
+      if (await snapshotFile.exists()) {
+        const { rename } = await import("node:fs/promises");
+        await rename(SNAPSHOT_PATH, `${SNAPSHOT_PATH}.pre-2.4.0-migration`);
+      }
+    } catch (renameErr) {
+      console.error(`Backfill rename failed (recoverable — will retry next boot): ${renameErr}`);
+    }
+
+    const elapsed = Date.now() - start;
+    const receiptCount =
+      readReceipts.size === 0 ? 0 : [...readReceipts.values()].reduce((a, s) => a + s.size, 0) +
+      [...deliveryReceipts.values()].reduce((a, s) => a + s.size, 0) +
+      [...engagedReceipts.values()].reduce((a, s) => a + s.size, 0);
+    logEvent("migration.backfill.complete", {
+      messages: messages.length,
+      receipts: receiptCount,
+      duration_ms: elapsed,
+    });
+    console.log(`2.4.0 backfill: ${messages.length} messages + ${receiptCount} receipts into SQLite in ${elapsed}ms`);
+  } catch (err) {
+    console.error(`Backfill failed (transaction rolled back): ${err}`);
+    logEvent("migration.backfill.error", { error: String(err) });
+  }
+}
+await runMessageBackfillIfNeeded();
 
 setInterval(writeArchive, ARCHIVE_INTERVAL_MS);
 
