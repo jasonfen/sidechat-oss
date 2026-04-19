@@ -1087,6 +1087,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     display: flex;
     align-items: flex-end;
     gap: 12px;
+    /* Indent body content so its left edge aligns with the sender name in
+       the header (past the caret + "[HH:MM:SS]" monospace prefix). Keeps
+       nested thread indentation from ever falling left of the sender. */
+    padding-left: 108px;
   }
   .msg-body {
     flex: 0 1 auto;
