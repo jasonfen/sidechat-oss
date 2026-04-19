@@ -521,6 +521,7 @@ interface Message {
   mentions: string[];
   files?: FileAttachment[];
   reply_to_id?: number | null;
+  reply_count?: number;
 }
 
 // 2.4.0 retired: the in-memory `messages` array and the
@@ -1034,6 +1035,59 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     color: #58a6ff;
     border-color: #388bfd;
   }
+  .msg-reply-chip-preview {
+    font-size: 0.75em;
+    color: #8b949e;
+    background: #161b22;
+    border-left: 2px solid #30363d;
+    padding: 2px 8px;
+    margin: 2px 0 4px 4px;
+    display: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 6em;
+    overflow: hidden;
+  }
+  .msg-reply-chip-preview.expanded { display: block; }
+  .msg-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+    padding-left: 2px;
+    font-size: 0.75em;
+    color: #484f58;
+  }
+  .msg-reply-btn, .msg-reply-count {
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: #484f58;
+    font: inherit;
+    padding: 0;
+  }
+  .msg-reply-btn:hover, .msg-reply-count:hover { color: #58a6ff; }
+  #replying-to-bar {
+    display: none;
+    padding: 4px 10px;
+    background: #161b22;
+    border-top: 1px solid #30363d;
+    border-bottom: 1px solid #30363d;
+    font-size: 0.8em;
+    color: #8b949e;
+    align-items: center;
+    gap: 8px;
+  }
+  #replying-to-bar.active { display: flex; }
+  #replying-to-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #replying-to-cancel {
+    cursor: pointer;
+    color: #8b949e;
+    background: none;
+    border: none;
+    font-size: 1.2em;
+    padding: 0 4px;
+  }
+  #replying-to-cancel:hover { color: #f85149; }
   .msg-time {
     color: #484f58;
   }
@@ -1330,6 +1384,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     <div id="messages"></div>
     <div id="pending-files"></div>
     <div id="input-bar">
+      <div id="replying-to-bar">
+        <span id="replying-to-text"></span>
+        <button type="button" id="replying-to-cancel" title="Cancel reply">&times;</button>
+      </div>
       <div id="autocomplete"></div>
       <form id="msg-form">
         <button type="button" id="attach-btn" title="Attach file">&#x1F4CE;</button>
@@ -1365,6 +1423,24 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   var pendingFiles = []; // { id, filename, size }
   var seen = new Set();
   var msgReceipts = {};
+  var msgContentCache = {};
+  var replyingToId = null;
+  var replyingToBar = document.getElementById('replying-to-bar');
+  var replyingToText = document.getElementById('replying-to-text');
+  var replyingToCancel = document.getElementById('replying-to-cancel');
+
+  function setReplyingTo(id, sender, content) {
+    replyingToId = id;
+    var preview = content.length > 80 ? content.slice(0, 80) + '\u2026' : content;
+    replyingToText.textContent = 'Replying to #' + id + ' from ' + sender + ': ' + preview;
+    replyingToBar.classList.add('active');
+    msgInput.focus();
+  }
+  function clearReplyingTo() {
+    replyingToId = null;
+    replyingToBar.classList.remove('active');
+  }
+  replyingToCancel.addEventListener('click', clearReplyingTo);
 
   function updateReceipts(id, type, name) {
     if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [], engagedBy: [] };
@@ -1815,23 +1891,64 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     }
     var replyChipHtml = '';
     if (msg.reply_to_id) {
-      replyChipHtml = '<div class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 replied to #' + msg.reply_to_id + '</div>';
+      replyChipHtml =
+        '<div class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 replied to #' + msg.reply_to_id + '</div>' +
+        '<div class="msg-reply-chip-preview" id="preview-' + msg.id + '"></div>';
     }
+    var actionsHtml = '<div class="msg-actions">' +
+      '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '">Reply</button>';
+    if (msg.reply_count && msg.reply_count > 0) {
+      actionsHtml += '<button type="button" class="msg-reply-count" data-parent-id="' + msg.id + '">\\u21B3 ' +
+        msg.reply_count + ' repl' + (msg.reply_count === 1 ? 'y' : 'ies') + '</button>';
+    }
+    actionsHtml += '</div>';
     div.innerHTML =
       replyChipHtml +
       '<div class="msg-header"><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       filesHtml +
+      actionsHtml +
       '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
+    msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
     var chip = div.querySelector('.msg-reply-chip');
     if (chip) {
       chip.addEventListener('click', function() {
         var targetId = chip.getAttribute('data-reply-to');
+        var preview = div.querySelector('.msg-reply-chip-preview');
+        if (preview && preview.classList.contains('expanded')) {
+          preview.classList.remove('expanded');
+          return;
+        }
+        var cached = msgContentCache[targetId];
+        if (cached && preview) {
+          preview.textContent = cached.sender + ': ' + cached.content.slice(0, 240) + (cached.content.length > 240 ? '\\u2026' : '');
+          preview.classList.add('expanded');
+        }
         var target = messagesEl.querySelector('[data-msg-id="' + targetId + '"]');
         if (target) {
           target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           target.style.background = '#1f2937';
           setTimeout(function() { target.style.background = ''; }, 1200);
+        }
+      });
+    }
+    var replyBtn = div.querySelector('.msg-reply-btn');
+    if (replyBtn) {
+      replyBtn.addEventListener('click', function() {
+        setReplyingTo(msg.id, msg.sender, msg.content);
+      });
+    }
+    var replyCountBtn = div.querySelector('.msg-reply-count');
+    if (replyCountBtn) {
+      replyCountBtn.addEventListener('click', function() {
+        var firstReply = messagesEl.querySelector('.msg-reply-chip[data-reply-to="' + msg.id + '"]');
+        if (firstReply) {
+          var wrapper = firstReply.closest('.msg');
+          if (wrapper) {
+            wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            wrapper.style.background = '#1f2937';
+            setTimeout(function() { wrapper.style.background = ''; }, 1200);
+          }
         }
       });
     }
@@ -2069,6 +2186,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     if (pendingFiles.length > 0) {
       payload.file_ids = pendingFiles.map(function(f) { return f.id; });
     }
+    if (replyingToId != null) {
+      payload.reply_to_id = replyingToId;
+    }
     fetch('/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2080,6 +2200,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       msgInput.value = '';
       pendingFiles = [];
       renderPendingFiles();
+      clearReplyingTo();
     })
     .catch(function(err) {
       alert('Failed to send: ' + err.message);
@@ -3949,6 +4070,20 @@ app.post("/admin/settings/files", requireAdmin, async (c) => {
   return c.json({ updated, settings: getFileSettings() });
 });
 
+// GET /messages/:id/replies — return child messages threaded to this id.
+// Used by the web UI to expand a "↳ N replies" badge on a parent into
+// its inline thread. Ascending by id (oldest reply first).
+app.get("/messages/:id/replies", requireSessionOrObserver, (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
+  const rows = db
+    .query(
+      "SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages WHERE reply_to_id = ? ORDER BY id"
+    )
+    .all(id) as MessageRow[];
+  return c.json({ parent_id: id, messages: withReceipts(dbRowsToMessages(rows)), count: rows.length });
+});
+
 // DELETE /admin/messages — bulk-delete messages by id. Admin-only.
 // Body: { ids: number[] } (1..100 positive integers).
 // Nulls reply_to_id on children + message_id on files before delete so
@@ -4347,6 +4482,13 @@ function dbRowsToMessages(rows: MessageRow[]): Message[] {
       mime_type: fr.mime_type,
     });
   }
+  const replyCountRows = db
+    .query(
+      `SELECT reply_to_id, COUNT(*) AS n FROM messages WHERE reply_to_id IN (${placeholders}) GROUP BY reply_to_id`
+    )
+    .all(...ids) as Array<{ reply_to_id: number; n: number }>;
+  const replyCounts = new Map<number, number>();
+  for (const r of replyCountRows) replyCounts.set(r.reply_to_id, r.n);
   return rows.map(r => ({
     id: r.id,
     timestamp: r.timestamp,
@@ -4355,6 +4497,7 @@ function dbRowsToMessages(rows: MessageRow[]): Message[] {
     mentions: JSON.parse(r.mentions),
     files: filesByMsg.get(r.id) ?? [],
     reply_to_id: r.reply_to_id,
+    reply_count: replyCounts.get(r.id) ?? 0,
   }));
 }
 
