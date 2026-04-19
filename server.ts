@@ -567,6 +567,11 @@ async function deliverWebhooks(msg: Message) {
       if (res.ok) {
         if (!deliveryReceipts.has(msg.id)) deliveryReceipts.set(msg.id, new Set());
         deliveryReceipts.get(msg.id)!.add(client.name);
+        // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
+        db.run(
+          "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+          [msg.id, client.name, "delivered", new Date().toISOString()]
+        );
         broadcastEvent("delivered", { id: msg.id, bot: client.name });
         webhookDeliveriesTotal++;
       } else {
@@ -4178,6 +4183,13 @@ app.post("/message", requirePostSession, async (c) => {
   }
 
   messages.push(msg);
+  // 2.4.0-dev write-through to SQLite. Read paths still use the in-memory
+  // array; this just keeps the tables in sync with every new post so the
+  // subsequent read-path migration has current data to query.
+  db.run(
+    "INSERT INTO messages (id, timestamp, sender, content, mentions, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [msg.id, msg.timestamp, msg.sender, msg.content, JSON.stringify(msg.mentions), null]
+  );
   messagesPostedTotal++;
   broadcastEvent("message", msg);
   const md = new Date(msg.timestamp);
@@ -4200,6 +4212,11 @@ app.post("/messages/:id/read", requirePostSession, (c) => {
   if (!readReceipts.has(id)) readReceipts.set(id, new Set());
   const wasNew = !readReceipts.get(id)!.has(reader);
   readReceipts.get(id)!.add(reader);
+  // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
+  db.run(
+    "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+    [id, reader, "read", new Date().toISOString()]
+  );
   if (wasNew) {
     broadcastEvent("read", { id, reader });
   }
@@ -4217,6 +4234,11 @@ app.post("/messages/:id/engaged", requirePostSession, (c) => {
   if (!engagedReceipts.has(id)) engagedReceipts.set(id, new Set());
   const wasNew = !engagedReceipts.get(id)!.has(engager);
   engagedReceipts.get(id)!.add(engager);
+  // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
+  db.run(
+    "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+    [id, engager, "engaged", new Date().toISOString()]
+  );
   if (wasNew) {
     broadcastEvent("engaged", { id, engager });
     logEvent("message.engaged", { id, engager });
@@ -4339,6 +4361,7 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
   });
   // Side effect: auto-mark engaged. Idempotent via Set semantics.
   let newEngagements = 0;
+  const engagedTs = new Date().toISOString();
   for (const m of pending) {
     if (!engagedReceipts.has(m.id)) engagedReceipts.set(m.id, new Set());
     const set = engagedReceipts.get(m.id)!;
@@ -4346,6 +4369,11 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
       set.add(me);
       newEngagements++;
       broadcastEvent("engaged", { id: m.id, engager: me });
+      // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
+      db.run(
+        "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+        [m.id, me, "engaged", engagedTs]
+      );
     }
   }
   if (newEngagements > 0) {
