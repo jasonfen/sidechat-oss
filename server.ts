@@ -2050,6 +2050,16 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         '<span class="msg-receipts-inline" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</span>' +
       '</div>';
     msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
+    // Wrap msg in .msg-wrapper with a .msg-children container. Created early
+    // so the collapse-caret handler below can reference it; the actual DOM
+    // insert happens at the end of this function.
+    var wrapper = document.createElement('div');
+    wrapper.className = 'msg-wrapper';
+    wrapper.setAttribute('data-wrapper-for', msg.id);
+    wrapper.appendChild(div);
+    var childrenContainer = document.createElement('div');
+    childrenContainer.className = 'msg-children';
+    wrapper.appendChild(childrenContainer);
     var chip = div.querySelector('.msg-reply-chip');
     if (chip) {
       chip.addEventListener('click', function() {
@@ -2110,17 +2120,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var mdPreviews = div.querySelectorAll('details.md-preview');
     for (var i = 0; i < mdPreviews.length; i++) attachMdPreview(mdPreviews[i]);
 
-    // Threaded tree insert: wrap msg in .msg-wrapper with a .msg-children
-    // container; append to parent's children container when a parent wrapper
-    // exists, else append at the top-level feed. Collapse caret shows only
-    // when at least one descendant is present (:has(...) CSS rule above).
-    var wrapper = document.createElement('div');
-    wrapper.className = 'msg-wrapper';
-    wrapper.setAttribute('data-wrapper-for', msg.id);
-    wrapper.appendChild(div);
-    var childrenContainer = document.createElement('div');
-    childrenContainer.className = 'msg-children';
-    wrapper.appendChild(childrenContainer);
+    // Append wrapper to parent's children container or to the top-level feed.
     var parentWrapper = msg.reply_to_id
       ? messagesEl.querySelector('.msg-wrapper[data-wrapper-for="' + msg.reply_to_id + '"]')
       : null;
