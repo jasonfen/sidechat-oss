@@ -4317,18 +4317,18 @@ function dbAllMessages(): Message[] {
       mime_type: fr.mime_type,
     });
   }
-  return rows.map(r => {
-    const m: Message = {
-      id: r.id,
-      timestamp: r.timestamp,
-      sender: r.sender,
-      content: r.content,
-      mentions: JSON.parse(r.mentions),
-    };
-    const files = filesByMsg.get(r.id);
-    if (files && files.length > 0) m.files = files;
-    return m;
-  });
+  return rows.map(r => ({
+    id: r.id,
+    timestamp: r.timestamp,
+    sender: r.sender,
+    content: r.content,
+    mentions: JSON.parse(r.mentions),
+    // Always set files: [] for parity with the pre-migration in-memory shape
+    // (POST /message assigned `files` unconditionally, even when empty).
+    // Omitting the key would flip an existence-check for any client
+    // distinguishing `hasOwnProperty('files')` vs `.files.length === 0`.
+    files: filesByMsg.get(r.id) ?? [],
+  }));
 }
 
 // GET /messages — session or observer auth required
