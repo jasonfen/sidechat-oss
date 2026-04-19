@@ -1543,7 +1543,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     if (readBy && readBy.length) lines.push('Read by ' + readBy.join(', '));
     if (engagedBy && engagedBy.length) lines.push('Engaged by ' + engagedBy.join(', '));
     if (deliveredTo && deliveredTo.length) lines.push('Delivered to ' + deliveredTo.join(', '));
-    return lines.join('\n');
+    return lines.join('\\n');
   }
   function updateReceipts(id, type, name) {
     if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [], engagedBy: [] };
