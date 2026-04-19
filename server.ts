@@ -4211,8 +4211,11 @@ app.get("/messages/all", requireSessionOrObserver, (c) => {
 app.get("/messages/pending-mentions", requireSession, (c) => {
   const client = c.get("client") as any;
   const me = client.name as string;
+  // Rehydrated messages from older snapshots may predate the mentions field,
+  // so coerce missing to empty array rather than .includes()-ing undefined.
   const pending = messages.filter((m) => {
-    if (!m.mentions.includes(me)) return false;
+    const mentions = (m as any).mentions ?? [];
+    if (!mentions.includes(me)) return false;
     if (m.sender === me) return false; // don't self-mention-deliver
     const readSet = readReceipts.get(m.id);
     return !readSet || !readSet.has(me);
