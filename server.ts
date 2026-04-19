@@ -1113,12 +1113,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   }
   .msg-reply-count:hover { color: #58a6ff; }
   .msg-receipts-inline {
-    flex: 1;
-    text-align: right;
     color: #484f58;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
   #replying-to-bar {
     display: none;
