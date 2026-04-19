@@ -990,6 +990,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     #input-bar button { padding: 6px 10px; font-size: 14px; flex-shrink: 0; }
     #attach-btn { padding: 0 6px; flex-shrink: 0; }
     .msg { font-size: 13px; }
+    /* No hover on touch — keep the reply icon softly visible. */
+    .msg-reply-btn { opacity: 0.4; }
+    .msg-body-row { padding-left: 16px; }
     #files-panel { max-height: 35vh; }
     #md-overlay { padding: 2vh 2vw; }
     #md-overlay-body { padding: 12px 14px; font-size: 14px; }
@@ -1087,10 +1090,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     display: flex;
     align-items: flex-end;
     gap: 12px;
-    /* Indent body content so its left edge aligns with the sender name in
-       the header (past the caret + "[HH:MM:SS]" monospace prefix). Keeps
-       nested thread indentation from ever falling left of the sender. */
-    padding-left: 108px;
+    /* Small indent that clears the collapse caret; no content-under-sender
+       alignment (the 108px gutter that created was too heavy on wide
+       viewports and drifted across time-prefix widths). */
+    padding-left: 24px;
   }
   .msg-body {
     flex: 0 1 auto;
@@ -1178,11 +1181,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     padding-left: 2px;
   }
   .msg-files {
-    margin-top: 4px;
+    margin-top: 2px;
     padding-left: 2px;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
   }
   .file-badge {
     display: inline-flex;
@@ -1337,7 +1342,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   .date-divider {
     display: flex;
     align-items: center;
-    margin: 20px 0 12px;
+    margin: 12px 0 6px;
     color: #484f58;
     font-size: 12px;
     font-weight: 600;
@@ -1525,6 +1530,21 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   }
   replyingToCancel.addEventListener('click', clearReplyingTo);
 
+  // Compact receipt badge: "\u2713 N" where N is read-count when anyone has read,
+  // else "\u25CB N" when only engaged (circle = eyes on, not yet finished).
+  // Returns "" when nobody's interacted. Full list available via title attr.
+  function compactReceipts(readBy, engagedBy) {
+    if (readBy && readBy.length) return '\u2713 ' + readBy.length;
+    if (engagedBy && engagedBy.length) return '\u25CB ' + engagedBy.length;
+    return '';
+  }
+  function fullReceiptsTitle(readBy, engagedBy, deliveredTo) {
+    var lines = [];
+    if (readBy && readBy.length) lines.push('Read by ' + readBy.join(', '));
+    if (engagedBy && engagedBy.length) lines.push('Engaged by ' + engagedBy.join(', '));
+    if (deliveredTo && deliveredTo.length) lines.push('Delivered to ' + deliveredTo.join(', '));
+    return lines.join('\n');
+  }
   function updateReceipts(id, type, name) {
     if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [], engagedBy: [] };
     var list = type === 'read' ? msgReceipts[id].readBy
@@ -1533,11 +1553,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     if (list.indexOf(name) === -1) list.push(name);
     var el = document.getElementById('receipts-' + id);
     if (!el) return;
-    var parts = [];
-    if (msgReceipts[id].deliveredTo.length) parts.push('Delivered to ' + msgReceipts[id].deliveredTo.join(', '));
-    if (msgReceipts[id].engagedBy.length) parts.push('Engaged by ' + msgReceipts[id].engagedBy.join(', '));
-    if (msgReceipts[id].readBy.length) parts.push('Read by ' + msgReceipts[id].readBy.join(', '));
-    el.textContent = parts.join(' \\u00b7 ');
+    var r = msgReceipts[id];
+    el.textContent = compactReceipts(r.readBy, r.engagedBy);
+    el.title = fullReceiptsTitle(r.readBy, r.engagedBy, r.deliveredTo);
   }
   var userScrolled = false;
   var currentUser = SC_USER;
@@ -1832,9 +1850,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   var acIndex = -1;
 
   // Color palette for dynamic sender colors
+  // Palette skews blue/purple/orange — greens removed to avoid visual
+  // collision with the #3fb950 "connected" status dot.
   var senderColors = [
-    '#d2a8ff', '#79c0ff', '#ffa657', '#7ee787', '#ff7b72',
-    '#f778ba', '#a5d6ff', '#ffd700', '#69db7c', '#da77f2'
+    '#d2a8ff', '#79c0ff', '#ffa657', '#f0883e', '#ff7b72',
+    '#f778ba', '#a5d6ff', '#ffd700', '#bc8cff', '#da77f2'
   ];
   var senderColorMap = {};
 
@@ -1982,13 +2002,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     var color = getSenderColor(msg.sender);
     var receiptsText = '';
+    var receiptsTitle = '';
     if (msg.deliveredTo || msg.readBy || msg.engagedBy) {
       msgReceipts[msg.id] = { readBy: msg.readBy || [], deliveredTo: msg.deliveredTo || [], engagedBy: msg.engagedBy || [] };
-      var parts = [];
-      if (msg.deliveredTo && msg.deliveredTo.length) parts.push('Delivered to ' + msg.deliveredTo.join(', '));
-      if (msg.engagedBy && msg.engagedBy.length) parts.push('Engaged by ' + msg.engagedBy.join(', '));
-      if (msg.readBy && msg.readBy.length) parts.push('Read by ' + msg.readBy.join(', '));
-      receiptsText = parts.join(' \\u00b7 ');
+      receiptsText = compactReceipts(msg.readBy || [], msg.engagedBy || []);
+      receiptsTitle = fullReceiptsTitle(msg.readBy || [], msg.engagedBy || [], msg.deliveredTo || []);
     }
     var filesHtml = '';
     if (msg.files && msg.files.length > 0) {
@@ -2017,10 +2035,17 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       });
       filesHtml += '</div>';
     }
-    var replyChipHtml = msg.reply_to_id
+    // Chip only when the parent is OUT of the loaded window — otherwise the
+    // visual indent under the parent is the relationship cue and the chip
+    // is redundant noise (UX review: 5 signals for one relationship).
+    var parentInDom = msg.reply_to_id
+      ? !!messagesEl.querySelector('.msg-wrapper[data-wrapper-for="' + msg.reply_to_id + '"]')
+      : false;
+    var showChip = msg.reply_to_id && !parentInDom;
+    var replyChipHtml = showChip
       ? '<span class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 #' + msg.reply_to_id + '</span>'
       : '';
-    var replyChipPreviewHtml = msg.reply_to_id
+    var replyChipPreviewHtml = showChip
       ? '<div class="msg-reply-chip-preview" id="preview-' + msg.id + '"></div>'
       : '';
     var replyCountHtml = (msg.reply_count && msg.reply_count > 0)
@@ -2043,7 +2068,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         '<div class="msg-footer">' +
           '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '" title="Reply">\\u21A9</button>' +
           replyCountHtml +
-          '<span class="msg-receipts-inline" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</span>' +
+          '<span class="msg-receipts-inline" id="receipts-' + msg.id + '" title="' + escapeHtml(receiptsTitle) + '">' + escapeHtml(receiptsText) + '</span>' +
         '</div>' +
       '</div>';
     msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
