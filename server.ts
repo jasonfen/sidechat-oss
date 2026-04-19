@@ -1850,11 +1850,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   var acIndex = -1;
 
   // Color palette for dynamic sender colors
-  // Palette skews blue/purple/orange — greens removed to avoid visual
-  // collision with the #3fb950 "connected" status dot.
+  // Diverse warm/cool mix — greens removed (clash with #3fb950 status
+  // dot) and the purple-heavy earlier palette thinned out to one
+  // magenta. Ordered so consecutive hash indices read as distinct.
   var senderColors = [
-    '#d2a8ff', '#79c0ff', '#ffa657', '#f0883e', '#ff7b72',
-    '#f778ba', '#a5d6ff', '#ffd700', '#bc8cff', '#da77f2'
+    '#79c0ff', '#ffa657', '#ff7b72', '#56d4dd', '#ffd700',
+    '#f778ba', '#f0883e', '#a5d6ff', '#da77f2', '#ff9e64'
   ];
   var senderColorMap = {};
 
