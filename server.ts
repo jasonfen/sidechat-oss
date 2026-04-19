@@ -4308,25 +4308,28 @@ function withReceipts(msgs: Message[]) {
   });
 }
 
-// 2.4.0-dev read-path helper. Loads all messages from SQLite with their
-// attached file-metadata joined in. Returns Message[] in the same shape
-// the in-memory `messages` array produced, so withReceipts() works
-// identically on the result. Single N-over-messages + N-over-files
-// query pair, no N+1.
-function dbAllMessages(): Message[] {
-  const rows = db.query(
-    "SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages ORDER BY id"
-  ).all() as Array<{
-    id: number;
-    timestamp: string;
-    sender: string;
-    content: string;
-    mentions: string;
-    reply_to_id: number | null;
-  }>;
-  const fileRows = db.query(
-    "SELECT id, filename, size, mime_type, message_id FROM files WHERE message_id IS NOT NULL"
-  ).all() as Array<{ id: string; filename: string; size: number; mime_type: string; message_id: number }>;
+// 2.4.0-dev read-path helpers. `dbRowsToMessages` converts SQLite rows
+// into the in-memory Message shape (incl. files-table enrichment).
+// `dbAllMessages` is the convenience wrapper for "all messages"; other
+// handlers pass their own filtered row sets.
+interface MessageRow {
+  id: number;
+  timestamp: string;
+  sender: string;
+  content: string;
+  mentions: string;
+  reply_to_id: number | null;
+}
+
+function dbRowsToMessages(rows: MessageRow[]): Message[] {
+  if (rows.length === 0) return [];
+  const ids = rows.map(r => r.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const fileRows = db
+    .query(
+      `SELECT id, filename, size, mime_type, message_id FROM files WHERE message_id IN (${placeholders})`
+    )
+    .all(...ids) as Array<{ id: string; filename: string; size: number; mime_type: string; message_id: number }>;
   const filesByMsg = new Map<number, FileAttachment[]>();
   for (const fr of fileRows) {
     if (!filesByMsg.has(fr.message_id)) filesByMsg.set(fr.message_id, []);
@@ -4351,6 +4354,15 @@ function dbAllMessages(): Message[] {
   }));
 }
 
+function dbAllMessages(): Message[] {
+  const rows = db
+    .query(
+      "SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages ORDER BY id"
+    )
+    .all() as MessageRow[];
+  return dbRowsToMessages(rows);
+}
+
 // GET /messages — session or observer auth required
 // Supports ?since=<ISO> (exclusive lower bound), ?until=<ISO> (inclusive
 // upper bound), or both together for a back-window fetch (used by the chat
@@ -4362,32 +4374,47 @@ app.get("/messages", requireSessionOrObserver, (c) => {
   const since = c.req.query("since");
   const until = c.req.query("until");
   const lookbackHours = c.req.query("lookback_hours");
-  let result: Message[];
+  let rows: MessageRow[];
 
   if (since || until) {
-    const sinceTs = since ? new Date(since).getTime() : -Infinity;
-    const untilTs = until ? new Date(until).getTime() : Infinity;
-    result = messages.filter((m) => {
-      const t = new Date(m.timestamp).getTime();
-      return t > sinceTs && t <= untilTs;
-    });
+    const params: any[] = [];
+    let where = "1=1";
+    if (since) { where += " AND timestamp > ?"; params.push(since); }
+    if (until) { where += " AND timestamp <= ?"; params.push(until); }
+    rows = db
+      .query(`SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages WHERE ${where} ORDER BY id`)
+      .all(...params) as MessageRow[];
   } else if (lookbackHours) {
     const hours = Number(lookbackHours);
     if (!Number.isFinite(hours) || hours <= 0) {
       return c.json({ error: "lookback_hours must be a positive number" }, 400);
     }
     const windowMs = hours * 3600 * 1000;
-    const wallCutoff = Date.now() - windowMs;
-    result = messages.filter((m) => new Date(m.timestamp).getTime() > wallCutoff);
-    if (result.length === 0 && messages.length > 0) {
-      const latestTs = new Date(messages[messages.length - 1].timestamp).getTime();
-      const fallbackCutoff = latestTs - windowMs;
-      result = messages.filter((m) => new Date(m.timestamp).getTime() > fallbackCutoff);
+    const wallCutoff = new Date(Date.now() - windowMs).toISOString();
+    rows = db
+      .query("SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages WHERE timestamp > ? ORDER BY id")
+      .all(wallCutoff) as MessageRow[];
+    if (rows.length === 0) {
+      // Fallback: window ending at the most recent message timestamp.
+      const latest = db
+        .query("SELECT timestamp FROM messages ORDER BY id DESC LIMIT 1")
+        .get() as { timestamp: string } | null;
+      if (latest) {
+        const fallbackCutoff = new Date(new Date(latest.timestamp).getTime() - windowMs).toISOString();
+        rows = db
+          .query("SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages WHERE timestamp > ? ORDER BY id")
+          .all(fallbackCutoff) as MessageRow[];
+      }
     }
   } else {
-    result = messages.slice(-50);
+    // No args: last 50 in chronological order.
+    const recent = db
+      .query("SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages ORDER BY id DESC LIMIT 50")
+      .all() as MessageRow[];
+    rows = recent.reverse();
   }
 
+  const result = dbRowsToMessages(rows);
   return c.json({ messages: withReceipts(result), count: result.length });
 });
 
@@ -4413,22 +4440,33 @@ app.get("/messages/all", requireSessionOrObserver, (c) => {
 app.get("/messages/pending-mentions", requireSession, (c) => {
   const client = c.get("client") as any;
   const me = client.name as string;
-  // Optional ?since=<ISO> lower bound. Added in 2.3.2 so callers (notably the
-  // MCP `list_pending_mentions()` tool, which defaults to 72h) can skip the
-  // historical backlog on first call instead of receiving years of messages.
   const sinceRaw = c.req.query("since");
-  const sinceTs = sinceRaw ? new Date(sinceRaw).getTime() : -Infinity;
-  // Rehydrated messages from older snapshots may predate the mentions field,
-  // so coerce missing to empty array rather than .includes()-ing undefined.
-  const pending = messages.filter((m) => {
-    const mentions = (m as any).mentions ?? [];
-    if (!mentions.includes(me)) return false;
-    if (m.sender === me) return false; // don't self-mention-deliver
-    if (sinceTs > -Infinity && new Date(m.timestamp).getTime() <= sinceTs) return false;
-    const readSet = readReceipts.get(m.id);
-    return !readSet || !readSet.has(me);
-  });
-  // Side effect: auto-mark engaged. Idempotent via Set semantics.
+
+  // 2.4.0-dev fifth read-path migration: SQL anti-join to find un-read mentions.
+  // `json_each(m.mentions)` unpacks the JSON array per message; the DISTINCT
+  // collapses duplicates when a bot is @-ed multiple times in one message.
+  // `NOT EXISTS` handles the "read receipt doesn't exist for me" condition
+  // efficiently via the message_receipts_msg_kind index (per fenbot).
+  const params: any[] = [me, me, me];
+  let where =
+    "je.value = ? AND m.sender != ? AND NOT EXISTS (SELECT 1 FROM message_receipts r WHERE r.message_id = m.id AND r.username = ? AND r.kind = 'read')";
+  if (sinceRaw) {
+    where += " AND m.timestamp > ?";
+    params.push(sinceRaw);
+  }
+  const rows = db
+    .query(
+      `SELECT DISTINCT m.id, m.timestamp, m.sender, m.content, m.mentions, m.reply_to_id
+       FROM messages m, json_each(m.mentions) je
+       WHERE ${where}
+       ORDER BY m.id`
+    )
+    .all(...params) as MessageRow[];
+  const pending = dbRowsToMessages(rows);
+
+  // Side effect: auto-mark engaged. Still mirrors into the in-memory Map for
+  // the legacy write-side .has() idempotency checks; write-through persists
+  // to message_receipts. INSERT OR IGNORE handles concurrent callers.
   let newEngagements = 0;
   const engagedTs = new Date().toISOString();
   for (const m of pending) {
@@ -4438,7 +4476,6 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
       set.add(me);
       newEngagements++;
       broadcastEvent("engaged", { id: m.id, engager: me });
-      // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
       db.run(
         "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
         [m.id, me, "engaged", engagedTs]
