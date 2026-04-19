@@ -125,6 +125,10 @@ try { SERVER_SHA = (await Bun.file(`${import.meta.dir}/version.txt`).text()).tri
 const ADMIN_USER = Bun.env.ADMIN_USER ?? "admin";
 const ADMIN_PASSWORD_HASH = Bun.env.ADMIN_PASSWORD_HASH ?? "";
 const SESSION_TTL_HOURS = parseInt(Bun.env.SESSION_TTL_HOURS ?? "24", 10);
+// scope=mcp sessions get a longer default (30d). The whitelist enforcement
+// narrows the blast radius vs full-scope tokens, so a longer TTL is an
+// acceptable tradeoff for not having to re-auth mid-session every 24h.
+const MCP_SESSION_TTL_HOURS = parseInt(Bun.env.MCP_SESSION_TTL_HOURS ?? "720", 10);
 const NONCE_TTL_SECONDS = parseInt(Bun.env.NONCE_TTL_SECONDS ?? "60", 10);
 const ADMIN_SESSION_TTL_HOURS = parseInt(Bun.env.ADMIN_SESSION_TTL_HOURS ?? "8", 10);
 
@@ -3053,11 +3057,13 @@ app.post("/auth/token", async (c) => {
   db.run("UPDATE nonces SET used = 1 WHERE value = ?", [body.nonce]);
 
   // Create session. Optional ?scope=mcp narrows the token to the MCP endpoint
-  // whitelist (see MCP_SCOPE_ALLOWED). Default scope is 'full'.
+  // whitelist (see MCP_SCOPE_ALLOWED) and gets MCP_SESSION_TTL_HOURS lifetime
+  // (default 720h = 30d) instead of the 24h full-scope default.
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + SESSION_TTL_HOURS * 3600 * 1000);
   const scope = c.req.query("scope") === "mcp" ? "mcp" : "full";
+  const ttlHours = scope === "mcp" ? MCP_SESSION_TTL_HOURS : SESSION_TTL_HOURS;
+  const expiresAt = new Date(now.getTime() + ttlHours * 3600 * 1000);
 
   db.run(
     "INSERT INTO sessions (token, fingerprint, expires_at, created_at, scope) VALUES (?, ?, ?, ?, ?)",
@@ -4211,12 +4217,18 @@ app.get("/messages/all", requireSessionOrObserver, (c) => {
 app.get("/messages/pending-mentions", requireSession, (c) => {
   const client = c.get("client") as any;
   const me = client.name as string;
+  // Optional ?since=<ISO> lower bound. Added in 2.3.2 so callers (notably the
+  // MCP `list_pending_mentions()` tool, which defaults to 72h) can skip the
+  // historical backlog on first call instead of receiving years of messages.
+  const sinceRaw = c.req.query("since");
+  const sinceTs = sinceRaw ? new Date(sinceRaw).getTime() : -Infinity;
   // Rehydrated messages from older snapshots may predate the mentions field,
   // so coerce missing to empty array rather than .includes()-ing undefined.
   const pending = messages.filter((m) => {
     const mentions = (m as any).mentions ?? [];
     if (!mentions.includes(me)) return false;
     if (m.sender === me) return false; // don't self-mention-deliver
+    if (sinceTs > -Infinity && new Date(m.timestamp).getTime() <= sinceTs) return false;
     const readSet = readReceipts.get(m.id);
     return !readSet || !readSet.has(me);
   });

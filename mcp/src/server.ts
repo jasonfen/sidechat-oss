@@ -87,8 +87,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_pending_mentions",
       description:
-        "Return @-mentions directed at this bot that have not yet been marked read. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent).",
-      inputSchema: { type: "object", properties: {} },
+        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since_hours: {
+            type: "number",
+            description:
+              "Hours of history to include. Default 72. Set to 0 to include the full backlog (useful on first MCP registration, then prefer the default on subsequent calls).",
+          },
+        },
+      },
     },
     {
       name: "post_reply",
@@ -127,13 +136,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 
   if (name === "list_pending_mentions") {
+    const rawHours = (args as any).since_hours;
+    const sinceHours = Number.isFinite(Number(rawHours)) ? Number(rawHours) : 72;
+    let path = "/messages/pending-mentions";
+    if (sinceHours > 0) {
+      const sinceIso = new Date(Date.now() - sinceHours * 3600 * 1000).toISOString();
+      path += `?since=${encodeURIComponent(sinceIso)}`;
+    }
     const { messages: pending, count } = await scJson<{
       messages: SideChatMessage[];
       count: number;
-    }>("/messages/pending-mentions");
+    }>(path);
     // Server already auto-marked engaged; nothing else to do client-side.
     return {
-      content: [{ type: "text", text: JSON.stringify({ count, messages: pending }) }],
+      content: [{ type: "text", text: JSON.stringify({ count, messages: pending, since_hours: sinceHours }) }],
     };
   }
 
