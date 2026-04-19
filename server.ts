@@ -1085,11 +1085,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   .msg-reply-chip-preview.expanded { display: block; }
   .msg-body-row {
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     gap: 12px;
   }
   .msg-body {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
   }
   .msg-footer {
@@ -1099,7 +1099,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     font-size: 0.7em;
     color: #484f58;
     flex-shrink: 0;
-    padding-top: 2px;
+    padding-bottom: 2px;
     white-space: nowrap;
   }
   .msg-reply-btn {
