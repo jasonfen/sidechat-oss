@@ -145,6 +145,18 @@ let SERVER_SHA = "unknown";
 try { SERVER_VERSION = (JSON.parse(await Bun.file(`${import.meta.dir}/package.json`).text()).version || "0.0.0").trim(); } catch {}
 try { SERVER_SHA = (await Bun.file(`${import.meta.dir}/version.txt`).text()).trim() || "unknown"; } catch {}
 
+// MCP_SCHEMA_REV bumps whenever the MCP tool surface changes in a way that
+// requires clients to re-handshake (tool added/removed/renamed, arg schema
+// changed). Monotonic integer. Separate from SERVER_VERSION because the REST
+// surface can evolve without touching MCP.
+const MCP_SCHEMA_REV = 1;
+
+// MCP_EXPECTED_CLIENT_BUILD_SHA = the commit-sha of mcp/src/server.ts that
+// this server version was released against. When a client's build-sha
+// diverges from this, their probe logs a drift warning.
+// Bumped alongside any mcp/src/server.ts change that lands on main.
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "82e7bff";
+
 // --- Config from env ---
 
 const ADMIN_USER = Bun.env.ADMIN_USER ?? "admin";
@@ -2577,6 +2589,19 @@ app.get("/version", (c) => {
 // X-SideChat-Client-Version header on /auth/token to populate the admin badge.
 app.get("/install/version", (c) => {
   return c.text(SERVER_VERSION + "\n");
+});
+
+// GET /install/mcp-version — JSON companion to /install/version for MCP clients.
+// Callers (the `mcp__sidechat__version` probe tool) compare their own build
+// sha to expected_client_build_sha and raise drift warnings when off.
+// schema_rev is the coarser "client must reconnect" signal, bumped only when
+// the MCP tool surface changes.
+app.get("/install/mcp-version", (c) => {
+  return c.json({
+    server_version: SERVER_VERSION,
+    schema_rev: MCP_SCHEMA_REV,
+    expected_client_build_sha: MCP_EXPECTED_CLIENT_BUILD_SHA,
+  });
 });
 
 app.get("/health", (c) => {
