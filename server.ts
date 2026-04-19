@@ -1083,14 +1083,24 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     overflow: hidden;
   }
   .msg-reply-chip-preview.expanded { display: block; }
+  .msg-body-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .msg-body {
+    flex: 1;
+    min-width: 0;
+  }
   .msg-footer {
     display: flex;
     align-items: baseline;
-    gap: 10px;
+    gap: 8px;
     font-size: 0.7em;
     color: #484f58;
-    padding-left: 2px;
-    min-height: 1em;
+    flex-shrink: 0;
+    padding-top: 2px;
+    white-space: nowrap;
   }
   .msg-reply-btn {
     cursor: pointer;
@@ -1098,10 +1108,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     border: none;
     color: #484f58;
     font: inherit;
+    font-size: 1.2em;
     padding: 0;
-    visibility: hidden;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s ease;
   }
-  .msg:hover .msg-reply-btn { visibility: visible; }
+  .msg:hover .msg-reply-btn { opacity: 1; }
   .msg-reply-btn:hover { color: #58a6ff; }
   .msg-reply-count {
     cursor: pointer;
@@ -1116,8 +1129,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     color: #484f58;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
     min-width: 0;
+    max-width: 320px;
   }
   #replying-to-bar {
     display: none;
@@ -2018,12 +2031,16 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         replyChipHtml +
       '</div>' +
       replyChipPreviewHtml +
-      '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
-      filesHtml +
-      '<div class="msg-footer">' +
-        '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '">Reply</button>' +
-        replyCountHtml +
-        '<span class="msg-receipts-inline" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</span>' +
+      '<div class="msg-body-row">' +
+        '<div class="msg-body">' +
+          '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
+          filesHtml +
+        '</div>' +
+        '<div class="msg-footer">' +
+          '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '" title="Reply">\\u21A9</button>' +
+          replyCountHtml +
+          '<span class="msg-receipts-inline" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</span>' +
+        '</div>' +
       '</div>';
     msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
     // Wrap msg in .msg-wrapper with a .msg-children container. Created early
