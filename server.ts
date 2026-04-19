@@ -4288,6 +4288,49 @@ function withReceipts(msgs: Message[]) {
   }));
 }
 
+// 2.4.0-dev read-path helper. Loads all messages from SQLite with their
+// attached file-metadata joined in. Returns Message[] in the same shape
+// the in-memory `messages` array produced, so withReceipts() works
+// identically on the result. Single N-over-messages + N-over-files
+// query pair, no N+1.
+function dbAllMessages(): Message[] {
+  const rows = db.query(
+    "SELECT id, timestamp, sender, content, mentions, reply_to_id FROM messages ORDER BY id"
+  ).all() as Array<{
+    id: number;
+    timestamp: string;
+    sender: string;
+    content: string;
+    mentions: string;
+    reply_to_id: number | null;
+  }>;
+  const fileRows = db.query(
+    "SELECT id, filename, size, mime_type, message_id FROM files WHERE message_id IS NOT NULL"
+  ).all() as Array<{ id: string; filename: string; size: number; mime_type: string; message_id: number }>;
+  const filesByMsg = new Map<number, FileAttachment[]>();
+  for (const fr of fileRows) {
+    if (!filesByMsg.has(fr.message_id)) filesByMsg.set(fr.message_id, []);
+    filesByMsg.get(fr.message_id)!.push({
+      id: fr.id,
+      filename: fr.filename,
+      size: fr.size,
+      mime_type: fr.mime_type,
+    });
+  }
+  return rows.map(r => {
+    const m: Message = {
+      id: r.id,
+      timestamp: r.timestamp,
+      sender: r.sender,
+      content: r.content,
+      mentions: JSON.parse(r.mentions),
+    };
+    const files = filesByMsg.get(r.id);
+    if (files && files.length > 0) m.files = files;
+    return m;
+  });
+}
+
 // GET /messages — session or observer auth required
 // Supports ?since=<ISO> (exclusive lower bound), ?until=<ISO> (inclusive
 // upper bound), or both together for a back-window fetch (used by the chat
@@ -4328,9 +4371,15 @@ app.get("/messages", requireSessionOrObserver, (c) => {
   return c.json({ messages: withReceipts(result), count: result.length });
 });
 
-// GET /messages/all — session or observer auth required
+// GET /messages/all — session or observer auth required.
+// 2.4.0-dev: second read-path migration. Source switched from the in-memory
+// `messages` array to SQLite via dbAllMessages() (includes file-attachment
+// enrichment). Receipts still come from the in-memory Maps via
+// withReceipts() since the map-backing is still canonical for reads; those
+// migrate in a subsequent commit.
 app.get("/messages/all", requireSessionOrObserver, (c) => {
-  return c.json({ messages: withReceipts(messages), count: messages.length });
+  const all = dbAllMessages();
+  return c.json({ messages: withReceipts(all), count: all.length });
 });
 
 // GET /messages/pending-mentions — bot auth required (requireSession, which
