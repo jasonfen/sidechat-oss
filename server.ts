@@ -4404,11 +4404,18 @@ app.get("/files-list", requireSessionOrObserver, (c) => {
   return c.json({ files });
 });
 
-// GET /dates — per-day message counts for the calendar sidebar
+// GET /dates — per-day message counts for the calendar sidebar.
+// 2.4.0-dev: first read-path migration — source switched from the in-memory
+// `messages` array to SQLite. Date keys are still computed in JS to preserve
+// the existing local-timezone bucketing behavior (server TZ=America/New_York
+// via the container env). SQLite's date() is UTC-only without a 'localtime'
+// modifier, and the current UI behavior assumes local-date keys, so we keep
+// the JS-side bucketing unchanged.
 app.get("/dates", requireSessionOrObserver, (c) => {
   const counts: Record<string, number> = {};
-  for (const m of messages) {
-    const d = new Date(m.timestamp);
+  const rows = db.query("SELECT timestamp FROM messages").all() as Array<{ timestamp: string }>;
+  for (const r of rows) {
+    const d = new Date(r.timestamp);
     const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     counts[key] = (counts[key] ?? 0) + 1;
   }
