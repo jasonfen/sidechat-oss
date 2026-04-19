@@ -508,11 +508,13 @@ interface Message {
   files?: FileAttachment[];
 }
 
-let messages: Message[] = [];
+// 2.4.0 retired: the in-memory `messages` array and the
+// `readReceipts` / `deliveryReceipts` / `engagedReceipts` Maps. All state
+// now lives in SQLite (tables `messages` + `message_receipts`).
+// `messageCounter` is the sole in-memory piece that stays — it's the
+// id generator for new posts, initialized from MAX(id) on boot and
+// monotonically incremented thereafter.
 let messageCounter = 0;
-const readReceipts = new Map<number, Set<string>>();
-const deliveryReceipts = new Map<number, Set<string>>();
-const engagedReceipts = new Map<number, Set<string>>();
 
 // --- Prometheus Counters ---
 let webhookDeliveriesTotal = 0;
@@ -565,9 +567,6 @@ async function deliverWebhooks(msg: Message) {
       redirect: "error",
     }).then((res) => {
       if (res.ok) {
-        if (!deliveryReceipts.has(msg.id)) deliveryReceipts.set(msg.id, new Set());
-        deliveryReceipts.get(msg.id)!.add(client.name);
-        // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
         db.run(
           "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
           [msg.id, client.name, "delivered", new Date().toISOString()]
@@ -603,40 +602,27 @@ function broadcastEvent(event: string, data: any) {
 
 const ARCHIVE_DIR = Bun.env.ARCHIVE_DIR ?? "/var/sidechat/archives";
 const ARCHIVE_INTERVAL_MS = 15 * 60 * 1000;
-const SNAPSHOT_PATH = `${ARCHIVE_DIR}/messages.json`;
 let lastArchivedId = 0;
-
-async function writeSnapshot() {
-  if (messages.length === 0) return;
-  try {
-    await Bun.write(SNAPSHOT_PATH, JSON.stringify({
-      messages,
-      messageCounter,
-      readReceipts: [...readReceipts].map(([k, v]) => [k, [...v]]),
-      deliveryReceipts: [...deliveryReceipts].map(([k, v]) => [k, [...v]]),
-      engagedReceipts: [...engagedReceipts].map(([k, v]) => [k, [...v]]),
-    }));
-  } catch (err) {
-    console.error(`Snapshot failed: ${err}`);
-  }
-}
 
 function todayLogPath(): string {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   return `${ARCHIVE_DIR}/${date}.md`;
 }
 
+// 2.4.0: writeArchive now sources from SQLite. No snapshot write — the
+// durable source of truth is the DB itself. This function only maintains
+// the daily markdown archive as a human-readable log stream.
 async function writeArchive() {
-  const newMessages = messages.filter((m) => m.id > lastArchivedId);
-  if (newMessages.length === 0) {
-    await writeSnapshot();
-    return;
-  }
+  const newMessages = db
+    .query(
+      "SELECT id, timestamp, sender, content FROM messages WHERE id > ? ORDER BY id"
+    )
+    .all(lastArchivedId) as Array<{ id: number; timestamp: string; sender: string; content: string }>;
+  if (newMessages.length === 0) return;
 
   const filepath = todayLogPath();
   const lines: string[] = [];
 
-  // Write header if file doesn't exist yet
   const file = Bun.file(filepath);
   if (!(await file.exists())) {
     const date = new Date().toISOString().slice(0, 10);
@@ -656,127 +642,27 @@ async function writeArchive() {
     const existing = (await file.exists()) ? await file.text() : "";
     await Bun.write(filepath, existing + lines.join("\n"));
     lastArchivedId = newMessages[newMessages.length - 1].id;
-    await writeSnapshot();
     console.log(`Archive appended ${newMessages.length} messages to ${filepath}`);
   } catch (err) {
     console.error(`Archive failed: ${err}`);
   }
 }
 
-// Rehydrate from snapshot on startup
+// 2.4.0 startup: messageCounter + lastArchivedId initialize from SQLite.
+// Rehydrate-from-snapshot is retired — the DB is the source of truth.
 try {
-  const file = Bun.file(SNAPSHOT_PATH);
-  if (await file.exists()) {
-    const data = await file.json();
-    messages = data.messages ?? [];
-    messageCounter = data.messageCounter ?? messages.length;
-    lastArchivedId = messageCounter;
-    if (data.readReceipts) {
-      for (const [k, v] of data.readReceipts) readReceipts.set(k, new Set(v));
-    }
-    if (data.deliveryReceipts) {
-      for (const [k, v] of data.deliveryReceipts) deliveryReceipts.set(k, new Set(v));
-    }
-    if (data.engagedReceipts) {
-      for (const [k, v] of data.engagedReceipts) engagedReceipts.set(k, new Set(v));
-    }
-    console.log(`Rehydrated ${messages.length} messages from snapshot`);
-  }
+  const row = db.query("SELECT COALESCE(MAX(id), 0) AS max_id FROM messages").get() as { max_id: number };
+  messageCounter = row.max_id;
+  lastArchivedId = messageCounter;
+  console.log(`messageCounter initialized from SQLite: ${messageCounter}`);
 } catch (err) {
-  console.error(`Snapshot rehydration failed: ${err}`);
+  console.error(`Failed to initialize messageCounter from SQLite: ${err}`);
 }
-
-// 2.4.0-dev SQLite backfill. Additive: populates the `messages` +
-// `message_receipts` tables from the rehydrated in-memory state if the DB is
-// empty. Reads + writes continue flowing through the in-memory array until
-// a subsequent commit migrates those call sites. The backfill is idempotent
-// (empty-table guard), runs in a single transaction, and renames the source
-// snapshot to `messages.json.pre-2.4.0-migration` AFTER COMMIT so a
-// pre-COMMIT crash leaves the snapshot in place for retry.
-async function runMessageBackfillIfNeeded() {
-  try {
-    const existing = db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number };
-    if (existing.n > 0) return; // already backfilled — idempotent no-op
-    if (messages.length === 0) return; // nothing to backfill (fresh install)
-
-    const start = Date.now();
-    const insertMsg = db.prepare(
-      "INSERT INTO messages (id, timestamp, sender, content, mentions, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)"
-    );
-    const insertReceipt = db.prepare(
-      "INSERT INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)"
-    );
-
-    const tx = db.transaction(() => {
-      for (const m of messages) {
-        const mentionsJson = JSON.stringify((m as any).mentions ?? []);
-        insertMsg.run(
-          m.id,
-          m.timestamp,
-          m.sender,
-          m.content,
-          mentionsJson,
-          (m as any).reply_to_id ?? null
-        );
-      }
-      const backfillTs = new Date().toISOString();
-      for (const [msgId, users] of readReceipts) {
-        for (const u of users) insertReceipt.run(msgId, u, "read", backfillTs);
-      }
-      for (const [msgId, users] of deliveryReceipts) {
-        for (const u of users) insertReceipt.run(msgId, u, "delivered", backfillTs);
-      }
-      for (const [msgId, users] of engagedReceipts) {
-        for (const u of users) insertReceipt.run(msgId, u, "engaged", backfillTs);
-      }
-    });
-
-    tx(); // BEGIN + INSERTs + COMMIT happen synchronously inside bun:sqlite's transaction()
-
-    // Only after COMMIT do we rename the snapshot to mark backfill complete.
-    // If this rename fails (disk full, permissions), the next boot sees non-
-    // empty messages table + snapshot present: the empty-table guard skips
-    // re-insertion and rename retries on next graceful shutdown's snapshot
-    // rotation. No data loss either way.
-    try {
-      const snapshotFile = Bun.file(SNAPSHOT_PATH);
-      if (await snapshotFile.exists()) {
-        const { rename } = await import("node:fs/promises");
-        await rename(SNAPSHOT_PATH, `${SNAPSHOT_PATH}.pre-2.4.0-migration`);
-      }
-    } catch (renameErr) {
-      console.error(`Backfill rename failed (recoverable — will retry next boot): ${renameErr}`);
-    }
-
-    const elapsed = Date.now() - start;
-    const receiptCount =
-      readReceipts.size === 0 ? 0 : [...readReceipts.values()].reduce((a, s) => a + s.size, 0) +
-      [...deliveryReceipts.values()].reduce((a, s) => a + s.size, 0) +
-      [...engagedReceipts.values()].reduce((a, s) => a + s.size, 0);
-    logEvent("migration.backfill.complete", {
-      messages: messages.length,
-      receipts: receiptCount,
-      duration_ms: elapsed,
-    });
-    console.log(`2.4.0 backfill: ${messages.length} messages + ${receiptCount} receipts into SQLite in ${elapsed}ms`);
-  } catch (err) {
-    console.error(`Backfill failed (transaction rolled back): ${err}`);
-    logEvent("migration.backfill.error", { error: String(err) });
-  }
-}
-await runMessageBackfillIfNeeded();
 
 setInterval(writeArchive, ARCHIVE_INTERVAL_MS);
 
-// Write snapshot on graceful shutdown
-process.on("SIGTERM", async () => {
-  await writeSnapshot();
-  process.exit(0);
-});
-process.on("SIGINT", async () => {
-  await writeSnapshot();
-  process.exit(0);
-});
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
 
 // --- Web Frontend ---
 
@@ -2580,9 +2466,9 @@ app.get("/metrics", (c) => {
     "# TYPE sidechat_messages_posted_total counter",
     `sidechat_messages_posted_total ${messagesPostedTotal}`,
     "",
-    "# HELP sidechat_messages_in_memory Current messages in memory",
-    "# TYPE sidechat_messages_in_memory gauge",
-    `sidechat_messages_in_memory ${messages.length}`,
+    "# HELP sidechat_messages_total Total messages in SQLite",
+    "# TYPE sidechat_messages_total gauge",
+    `sidechat_messages_total ${(db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n}`,
     "",
     "# HELP sidechat_sse_clients_active Active SSE connections",
     "# TYPE sidechat_sse_clients_active gauge",
@@ -2656,7 +2542,8 @@ app.get("/health", (c) => {
 
   // Return JSON for programmatic consumers
   if (accept.includes("application/json")) {
-    return c.json({ status: "ok", messageCount: messages.length, uptime, sseClients: sseClients.size });
+    const messageCount = (db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
+    return c.json({ status: "ok", messageCount, uptime, sseClients: sseClients.size });
   }
 
   return c.html(`<!DOCTYPE html>
@@ -4182,10 +4069,6 @@ app.post("/message", requirePostSession, async (c) => {
     }
   }
 
-  messages.push(msg);
-  // 2.4.0-dev write-through to SQLite. Read paths still use the in-memory
-  // array; this just keeps the tables in sync with every new post so the
-  // subsequent read-path migration has current data to query.
   db.run(
     "INSERT INTO messages (id, timestamp, sender, content, mentions, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
     [msg.id, msg.timestamp, msg.sender, msg.content, JSON.stringify(msg.mentions), null]
@@ -4205,40 +4088,29 @@ app.post("/message", requirePostSession, async (c) => {
 app.post("/messages/:id/read", requirePostSession, (c) => {
   const id = parseInt(c.req.param("id"), 10);
   if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
-  if (!messages.some(m => m.id === id)) {
-    return c.json({ error: "Message not found" }, 404);
-  }
+  const exists = db.query("SELECT 1 FROM messages WHERE id = ?").get(id);
+  if (!exists) return c.json({ error: "Message not found" }, 404);
   const reader = c.get("sender") as string;
-  if (!readReceipts.has(id)) readReceipts.set(id, new Set());
-  const wasNew = !readReceipts.get(id)!.has(reader);
-  readReceipts.get(id)!.add(reader);
-  // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
-  db.run(
+  const result = db.run(
     "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
     [id, reader, "read", new Date().toISOString()]
   );
-  if (wasNew) {
-    broadcastEvent("read", { id, reader });
-  }
+  const wasNew = result.changes > 0;
+  if (wasNew) broadcastEvent("read", { id, reader });
   return c.json({ status: "ok" }, 200);
 });
 
-// POST /messages/:id/engaged — mark message as engaged (Claude opened it)
 app.post("/messages/:id/engaged", requirePostSession, (c) => {
   const id = parseInt(c.req.param("id"), 10);
   if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
-  if (!messages.some(m => m.id === id)) {
-    return c.json({ error: "Message not found" }, 404);
-  }
+  const exists = db.query("SELECT 1 FROM messages WHERE id = ?").get(id);
+  if (!exists) return c.json({ error: "Message not found" }, 404);
   const engager = c.get("sender") as string;
-  if (!engagedReceipts.has(id)) engagedReceipts.set(id, new Set());
-  const wasNew = !engagedReceipts.get(id)!.has(engager);
-  engagedReceipts.get(id)!.add(engager);
-  // 2.4.0-dev write-through. INSERT OR IGNORE for idempotency.
-  db.run(
+  const result = db.run(
     "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
     [id, engager, "engaged", new Date().toISOString()]
   );
+  const wasNew = result.changes > 0;
   if (wasNew) {
     broadcastEvent("engaged", { id, engager });
     logEvent("message.engaged", { id, engager });
@@ -4470,16 +4342,13 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
   let newEngagements = 0;
   const engagedTs = new Date().toISOString();
   for (const m of pending) {
-    if (!engagedReceipts.has(m.id)) engagedReceipts.set(m.id, new Set());
-    const set = engagedReceipts.get(m.id)!;
-    if (!set.has(me)) {
-      set.add(me);
+    const result = db.run(
+      "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+      [m.id, me, "engaged", engagedTs]
+    );
+    if (result.changes > 0) {
       newEngagements++;
       broadcastEvent("engaged", { id: m.id, engager: me });
-      db.run(
-        "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
-        [m.id, me, "engaged", engagedTs]
-      );
     }
   }
   if (newEngagements > 0) {
@@ -4493,20 +4362,27 @@ app.get("/files-list", requireSessionOrObserver, (c) => {
   const rows = db.query(
     "SELECT id, filename, size, mime_type, uploader, message_id, uploaded_at FROM files WHERE message_id IS NOT NULL ORDER BY uploaded_at DESC LIMIT 500"
   ).all() as any[];
-  const msgById = new Map(messages.map(m => [m.id, m]));
-  const files = rows.map(r => {
-    const m = msgById.get(r.message_id);
-    return {
-      id: r.id,
-      filename: r.filename,
-      size: r.size,
-      mime_type: r.mime_type,
-      uploader: r.uploader,
-      message_id: r.message_id,
-      uploaded_at: r.uploaded_at,
-      mentions: m?.mentions ?? [],
-    };
-  });
+  const msgIds = [...new Set(rows.map(r => r.message_id))];
+  const mentionsByMsg = new Map<number, string[]>();
+  if (msgIds.length > 0) {
+    const placeholders = msgIds.map(() => "?").join(",");
+    const msgRows = db.query(
+      `SELECT id, mentions FROM messages WHERE id IN (${placeholders})`
+    ).all(...msgIds) as Array<{ id: number; mentions: string }>;
+    for (const m of msgRows) {
+      try { mentionsByMsg.set(m.id, JSON.parse(m.mentions || "[]")); } catch { mentionsByMsg.set(m.id, []); }
+    }
+  }
+  const files = rows.map(r => ({
+    id: r.id,
+    filename: r.filename,
+    size: r.size,
+    mime_type: r.mime_type,
+    uploader: r.uploader,
+    message_id: r.message_id,
+    uploaded_at: r.uploaded_at,
+    mentions: mentionsByMsg.get(r.message_id) ?? [],
+  }));
   return c.json({ files });
 });
 
@@ -4551,7 +4427,8 @@ app.get("/events", requireSessionOrObserver, (c) => {
   const stream = new ReadableStream({
     type: "direct",
     async pull(controller) {
-      controller.write(`event: connected\ndata: ${JSON.stringify({ messageCount: messages.length, username, canPost: userCanPost })}\n\n`);
+      const messageCount = (db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
+      controller.write(`event: connected\ndata: ${JSON.stringify({ messageCount, username, canPost: userCanPost })}\n\n`);
       controller.flush();
 
       const send = (event: string, data: any) => {
