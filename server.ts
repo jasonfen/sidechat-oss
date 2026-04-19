@@ -1041,29 +1041,20 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     padding-bottom: 8px;
   }
   .msg {
-    margin-bottom: 16px;
-  }
-  .msg-wrapper {
-    /* container for one msg + its descendants (nested .msg-wrappers) */
+    margin-bottom: 6px;
   }
   .msg-children {
-    margin-left: 24px;
-    padding-left: 8px;
-    border-left: 2px solid #21262d;
+    margin-left: 20px;
   }
-  .msg-children:empty {
-    display: none;
-  }
-  .msg-wrapper.collapsed > .msg-children {
-    display: none;
-  }
+  .msg-children:empty { display: none; }
+  .msg-wrapper.collapsed > .msg-children { display: none; }
   .collapse-caret {
     display: inline-block;
-    width: 14px;
+    width: 12px;
     color: #8b949e;
     cursor: pointer;
     user-select: none;
-    font-size: 0.85em;
+    font-size: 0.8em;
     margin-right: 2px;
   }
   .collapse-caret:hover { color: #58a6ff; }
@@ -1071,30 +1062,25 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     visibility: hidden;
   }
   .msg-header {
-    margin-bottom: 2px;
+    margin-bottom: 1px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .msg-reply-chip {
-    font-size: 0.75em;
-    color: #8b949e;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    padding: 1px 6px;
-    margin-bottom: 2px;
-    display: inline-block;
+    font-size: 0.7em;
+    color: #6e7681;
     cursor: pointer;
   }
-  .msg-reply-chip:hover {
-    color: #58a6ff;
-    border-color: #388bfd;
-  }
+  .msg-reply-chip:hover { color: #58a6ff; }
   .msg-reply-chip-preview {
     font-size: 0.75em;
     color: #8b949e;
     background: #161b22;
     border-left: 2px solid #30363d;
     padding: 2px 8px;
-    margin: 2px 0 4px 4px;
+    margin: 1px 0 2px 4px;
     display: none;
     white-space: pre-wrap;
     word-break: break-word;
@@ -1102,15 +1088,27 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     overflow: hidden;
   }
   .msg-reply-chip-preview.expanded { display: block; }
-  .msg-actions {
+  .msg-footer {
     display: flex;
-    gap: 8px;
-    margin-top: 2px;
-    padding-left: 2px;
-    font-size: 0.75em;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.7em;
     color: #484f58;
+    padding-left: 2px;
+    min-height: 1em;
   }
-  .msg-reply-btn, .msg-reply-count {
+  .msg-reply-btn {
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: #484f58;
+    font: inherit;
+    padding: 0;
+    visibility: hidden;
+  }
+  .msg:hover .msg-reply-btn { visibility: visible; }
+  .msg-reply-btn:hover { color: #58a6ff; }
+  .msg-reply-count {
     cursor: pointer;
     background: none;
     border: none;
@@ -1118,7 +1116,15 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     font: inherit;
     padding: 0;
   }
-  .msg-reply-btn:hover, .msg-reply-count:hover { color: #58a6ff; }
+  .msg-reply-count:hover { color: #58a6ff; }
+  .msg-receipts-inline {
+    flex: 1;
+    text-align: right;
+    color: #484f58;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   #replying-to-bar {
     display: none;
     padding: 4px 10px;
@@ -2018,26 +2024,31 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       });
       filesHtml += '</div>';
     }
-    var replyChipHtml = '';
-    if (msg.reply_to_id) {
-      replyChipHtml =
-        '<div class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 replied to #' + msg.reply_to_id + '</div>' +
-        '<div class="msg-reply-chip-preview" id="preview-' + msg.id + '"></div>';
-    }
-    var actionsHtml = '<div class="msg-actions">' +
-      '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '">Reply</button>';
-    if (msg.reply_count && msg.reply_count > 0) {
-      actionsHtml += '<button type="button" class="msg-reply-count" data-parent-id="' + msg.id + '">\\u21B3 ' +
-        msg.reply_count + ' repl' + (msg.reply_count === 1 ? 'y' : 'ies') + '</button>';
-    }
-    actionsHtml += '</div>';
+    var replyChipHtml = msg.reply_to_id
+      ? '<span class="msg-reply-chip" data-reply-to="' + msg.reply_to_id + '">\\u21B3 #' + msg.reply_to_id + '</span>'
+      : '';
+    var replyChipPreviewHtml = msg.reply_to_id
+      ? '<div class="msg-reply-chip-preview" id="preview-' + msg.id + '"></div>'
+      : '';
+    var replyCountHtml = (msg.reply_count && msg.reply_count > 0)
+      ? '<button type="button" class="msg-reply-count" data-parent-id="' + msg.id + '">\\u21B3 ' +
+          msg.reply_count + ' repl' + (msg.reply_count === 1 ? 'y' : 'ies') + '</button>'
+      : '';
     div.innerHTML =
-      replyChipHtml +
-      '<div class="msg-header"><span class="collapse-caret" data-target-msg-id="' + msg.id + '">\\u25BE</span><span class="msg-time">[' + time + ']</span> <span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span></div>' +
+      '<div class="msg-header">' +
+        '<span class="collapse-caret" data-target-msg-id="' + msg.id + '">\\u25BE</span>' +
+        '<span class="msg-time">[' + time + ']</span>' +
+        '<span style="color:' + color + ';font-weight:600;">' + escapeHtml(msg.sender) + '</span>' +
+        replyChipHtml +
+      '</div>' +
+      replyChipPreviewHtml +
       '<div class="msg-content">' + formatContent(msg.content) + '</div>' +
       filesHtml +
-      actionsHtml +
-      '<div class="msg-receipts" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</div>';
+      '<div class="msg-footer">' +
+        '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '">Reply</button>' +
+        replyCountHtml +
+        '<span class="msg-receipts-inline" id="receipts-' + msg.id + '">' + escapeHtml(receiptsText) + '</span>' +
+      '</div>';
     msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
     var chip = div.querySelector('.msg-reply-chip');
     if (chip) {
