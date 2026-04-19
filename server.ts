@@ -2116,6 +2116,24 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       try { var d = JSON.parse(e.data); if (d && d.date && window.__calMarkDay) window.__calMarkDay(d.date); } catch(_) {}
     });
 
+    es.addEventListener('deleted', function(e) {
+      try {
+        var data = JSON.parse(e.data);
+        if (!data || !Array.isArray(data.ids)) return;
+        data.ids.forEach(function(id) {
+          var el = messagesEl.querySelector('[data-msg-id="' + id + '"]');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          seen.delete(id);
+          var chips = messagesEl.querySelectorAll('.msg-reply-chip[data-reply-to="' + id + '"]');
+          for (var i = 0; i < chips.length; i++) {
+            chips[i].textContent = '\\u21B3 replied to #' + id + ' (deleted)';
+            chips[i].style.cursor = 'default';
+            chips[i].style.color = '#6e7681';
+          }
+        });
+      } catch(_) {}
+    });
+
     es.addEventListener('ping', function() {});
 
     es.onerror = function() {
@@ -3902,6 +3920,52 @@ app.post("/admin/settings/files", requireAdmin, async (c) => {
     logEvent("settings.updated", { key: "max_total_storage", new_value_summary: body.max_total_storage, admin_session_id: adminSid });
   }
   return c.json({ updated, settings: getFileSettings() });
+});
+
+// DELETE /admin/messages — bulk-delete messages by id. Admin-only.
+// Body: { ids: number[] } (1..100 positive integers).
+// Nulls reply_to_id on children + message_id on files before delete so
+// orphaned references don't show stale chips or dangling links.
+// Receipts: foreign_keys is off so ON DELETE CASCADE is a no-op — we
+// explicitly DELETE from message_receipts first.
+// Broadcasts "deleted" SSE event with the ids actually removed so
+// connected clients can drop the rendered rows.
+app.delete("/admin/messages", requireAdmin, async (c) => {
+  const body = await c.req.json<{ ids?: number[] }>().catch(() => ({} as any));
+  const ids = body.ids;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return c.json({ error: "ids must be a non-empty array of positive integers" }, 400);
+  }
+  if (ids.length > 100) {
+    return c.json({ error: "ids may not exceed 100 per request" }, 400);
+  }
+  if (!ids.every((n) => Number.isInteger(n) && n > 0)) {
+    return c.json({ error: "ids must all be positive integers" }, 400);
+  }
+  const placeholders = ids.map(() => "?").join(",");
+  const existing = (db
+    .query(`SELECT id FROM messages WHERE id IN (${placeholders})`)
+    .all(...ids) as Array<{ id: number }>).map((r) => r.id);
+  if (existing.length === 0) {
+    return c.json({ deleted: 0, ids: [] });
+  }
+  const deletedIds = existing;
+  const delPlaceholders = deletedIds.map(() => "?").join(",");
+  const tx = db.transaction(() => {
+    db.run(`UPDATE messages SET reply_to_id = NULL WHERE reply_to_id IN (${delPlaceholders})`, deletedIds);
+    db.run(`UPDATE files SET message_id = NULL WHERE message_id IN (${delPlaceholders})`, deletedIds);
+    db.run(`DELETE FROM message_receipts WHERE message_id IN (${delPlaceholders})`, deletedIds);
+    db.run(`DELETE FROM messages WHERE id IN (${delPlaceholders})`, deletedIds);
+  });
+  tx();
+  const adminSid = adminSessionIdShort(c.get("admin_session_token") as string);
+  logEvent("admin.messages.bulk_delete", {
+    admin_session_id: adminSid,
+    count: deletedIds.length,
+    ids: deletedIds,
+  });
+  broadcastEvent("deleted", { ids: deletedIds });
+  return c.json({ deleted: deletedIds.length, ids: deletedIds });
 });
 
 // GET /users — session or observer auth required
