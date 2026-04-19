@@ -835,7 +835,33 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     letter-spacing: 0.8px;
     border-bottom: 1px solid #21262d;
     flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
   }
+  #files-group-select {
+    background: #0d1117;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    font-size: 10px;
+    padding: 2px 4px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    cursor: pointer;
+  }
+  .files-group-header {
+    padding: 6px 14px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #6e7681;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-top: 1px solid #21262d;
+  }
+  .files-group-header:first-child { border-top: none; }
   #files-list {
     overflow-y: auto;
     padding: 4px 0;
@@ -1205,6 +1231,14 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     max-height: 600px;
     overflow-y: auto;
   }
+  .md-preview-body .txt-preview-body {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    color: #c9d1d9;
+  }
   .md-preview-body h1, .md-preview-body h2, .md-preview-body h3,
   .md-preview-body h4, .md-preview-body h5, .md-preview-body h6 {
     margin: 12px 0 6px;
@@ -1389,7 +1423,14 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       <div id="cal-grid"></div>
     </div>
     <div id="files-panel">
-      <div id="files-header">Files</div>
+      <div id="files-header">
+        <span>Files</span>
+        <select id="files-group-select" title="Group files by">
+          <option value="flat">flat</option>
+          <option value="type">by type</option>
+          <option value="sender">by sender</option>
+        </select>
+      </div>
       <div id="files-list"></div>
     </div>
   </div>
@@ -1643,6 +1684,48 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
     return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
   }
+  function fileType(filename) {
+    var n = (filename || '').toLowerCase();
+    if (/\.(md|markdown)$/.test(n)) return 'markdown';
+    if (/\.(txt|log|csv|text)$/.test(n)) return 'text';
+    if (/\.(png|jpe?g|gif|webp|svg|bmp)$/.test(n)) return 'image';
+    if (/\.pdf$/.test(n)) return 'pdf';
+    return 'other';
+  }
+  var TYPE_ORDER = ['markdown', 'text', 'image', 'pdf', 'other'];
+  function appendFileRow(container, f) {
+    var row = document.createElement('div');
+    row.className = 'file-row';
+    var isMd = /\.(md|markdown)$/i.test(f.filename);
+    var isTxt = /\.(txt|log|csv|text)$/i.test(f.filename);
+    var inline = isMd || isTxt;
+    row.title = inline ? f.filename + ' — click to preview' : f.filename + ' — click to download';
+    var fn = document.createElement('div');
+    fn.className = 'fn';
+    fn.textContent = f.filename;
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    var left = document.createElement('span');
+    left.textContent = f.uploader;
+    var right = document.createElement('span');
+    right.textContent = fmtSize(f.size);
+    meta.appendChild(left); meta.appendChild(right);
+    var line2 = document.createElement('div');
+    line2.className = 'meta-line2';
+    var sentTo = (f.mentions && f.mentions.length) ? '\u2192 ' + f.mentions.join(', ') : '\u2192 everyone';
+    line2.textContent = fmtDateTime(f.uploaded_at) + '  ' + sentTo;
+    row.appendChild(fn); row.appendChild(meta); row.appendChild(line2);
+    row.addEventListener('click', function() {
+      if (isMd) {
+        openMdOverlay(f.id, f.filename);
+      } else if (isTxt) {
+        openMdOverlay(f.id, f.filename, 'txt');
+      } else {
+        window.location.href = '/files/' + encodeURIComponent(f.id) + '/download?token=' + encodeURIComponent(SC_TOKEN);
+      }
+    });
+    container.appendChild(row);
+  }
   function renderFilesPanel(files) {
     filesListEl.innerHTML = '';
     if (!files || files.length === 0) {
@@ -1652,36 +1735,29 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       filesListEl.appendChild(e);
       return;
     }
+    var mode = localStorage.getItem('sc-files-group') || 'flat';
+    if (mode === 'flat') {
+      files.forEach(function(f) { appendFileRow(filesListEl, f); });
+      return;
+    }
+    var groups = {};
+    var keyOrder = [];
     files.forEach(function(f) {
-      var row = document.createElement('div');
-      row.className = 'file-row';
-      var isMd = /\.(md|markdown)$/i.test(f.filename);
-      row.title = isMd ? f.filename + ' — click to preview' : f.filename + ' — click to download';
-      var fn = document.createElement('div');
-      fn.className = 'fn';
-      fn.textContent = f.filename;
-      var meta = document.createElement('div');
-      meta.className = 'meta';
-      var left = document.createElement('span');
-      left.textContent = f.uploader;
-      var right = document.createElement('span');
-      right.textContent = fmtSize(f.size);
-      meta.appendChild(left); meta.appendChild(right);
-      var line2 = document.createElement('div');
-      line2.className = 'meta-line2';
-      var sentTo = (f.mentions && f.mentions.length) ? '\u2192 ' + f.mentions.join(', ') : '\u2192 everyone';
-      line2.textContent = fmtDateTime(f.uploaded_at) + '  ' + sentTo;
-      row.appendChild(fn);
-      row.appendChild(meta);
-      row.appendChild(line2);
-      row.addEventListener('click', function() {
-        if (isMd) {
-          openMdOverlay(f.id, f.filename);
-        } else {
-          window.location.href = '/files/' + encodeURIComponent(f.id) + '/download?token=' + encodeURIComponent(SC_TOKEN);
-        }
-      });
-      filesListEl.appendChild(row);
+      var k = mode === 'type' ? fileType(f.filename) : f.uploader;
+      if (!groups[k]) { groups[k] = []; keyOrder.push(k); }
+      groups[k].push(f);
+    });
+    if (mode === 'type') {
+      keyOrder.sort(function(a, b) { return TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b); });
+    } else {
+      keyOrder.sort();
+    }
+    keyOrder.forEach(function(k) {
+      var hdr = document.createElement('div');
+      hdr.className = 'files-group-header';
+      hdr.textContent = k + ' (' + groups[k].length + ')';
+      filesListEl.appendChild(hdr);
+      groups[k].forEach(function(f) { appendFileRow(filesListEl, f); });
     });
   }
   function refreshFiles() {
@@ -1691,9 +1767,20 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       .catch(function(){});
   }
   window.__refreshFiles = refreshFiles;
+  // Restore + wire the files grouping selector
+  var filesGroupSelect = document.getElementById('files-group-select');
+  if (filesGroupSelect) {
+    var savedMode = localStorage.getItem('sc-files-group') || 'flat';
+    filesGroupSelect.value = savedMode;
+    filesGroupSelect.addEventListener('change', function() {
+      localStorage.setItem('sc-files-group', filesGroupSelect.value);
+      refreshFiles();
+    });
+  }
   refreshFiles();
 
-  function openMdOverlay(fileId, filename) {
+  function openMdOverlay(fileId, filename, mode) {
+    mode = mode || 'md';
     var ovl = document.createElement('div');
     ovl.id = 'md-overlay';
     var card = document.createElement('div');
@@ -1732,6 +1819,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function(text){
         if (text.length > 200 * 1024) { body.textContent = 'File too large for preview. Use Download.'; return; }
+        if (mode === 'txt') {
+          body.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
+          return;
+        }
         var html = window.marked ? window.marked.parse(text) : text;
         body.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html, {
           ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
@@ -1831,7 +1922,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           (declaredSize / 1024).toFixed(0) + ' KB &gt; ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB). Use the download link.</div>';
         return;
       }
-      if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+      var previewMode = details.getAttribute('data-mode') || 'md';
+      if (previewMode === 'md' && (typeof marked === 'undefined' || typeof DOMPurify === 'undefined')) {
         body.innerHTML = '<div class="md-preview-error">Markdown renderer not available.</div>';
         return;
       }
@@ -1847,6 +1939,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           return blob.text();
         })
         .then(function(text) {
+          var mode = details.getAttribute('data-mode') || 'md';
+          if (mode === 'txt') {
+            // Plaintext: just escape + pre-wrap. No markdown parse, no sanitizer.
+            body.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
+            return;
+          }
           var rendered;
           try { rendered = marked.parse(text, { breaks: true, gfm: true }); }
           catch (e) { rendered = '<pre>' + escapeHtml(text) + '</pre>'; }
@@ -1902,10 +2000,13 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           : (f.size / 1048576).toFixed(1) + ' MB';
         var lower = (f.filename || '').toLowerCase();
         var isMd = lower.endsWith('.md') || lower.endsWith('.markdown');
-        if (isMd) {
-          filesHtml += '<details class="md-preview" data-file-id="' + encodeURIComponent(f.id) + '" data-file-size="' + f.size + '">' +
+        var isTxt = /\\.(txt|log|csv|text)$/i.test(lower);
+        if (isMd || isTxt) {
+          var mode = isMd ? 'md' : 'txt';
+          var icon = isMd ? '&#x1F4DD;' : '&#x1F4C4;';
+          filesHtml += '<details class="md-preview" data-file-id="' + encodeURIComponent(f.id) + '" data-file-size="' + f.size + '" data-mode="' + mode + '">' +
             '<summary>' +
-              '<span class="md-preview-label">&#x1F4DD; ' + escapeHtml(f.filename) + ' <span class="md-preview-size">(' + sizeStr + ')</span></span>' +
+              '<span class="md-preview-label">' + icon + ' ' + escapeHtml(f.filename) + ' <span class="md-preview-size">(' + sizeStr + ')</span></span>' +
               '<a class="md-preview-download" href="/files/' + encodeURIComponent(f.id) + '/download" target="_blank" rel="noopener">download</a>' +
             '</summary>' +
             '<div class="md-preview-body" data-loaded="0">Loading\\u2026</div>' +
