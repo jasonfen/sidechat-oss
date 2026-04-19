@@ -4279,13 +4279,33 @@ app.delete("/webhook", requirePostSession, (c) => {
   return c.json({ cleared: true }, 200);
 });
 
+// 2.4.0-dev receipt read-path: source receipts from SQLite
+// `message_receipts` in a single batched SELECT keyed by the incoming
+// message ids. Returns the same shape the prior in-memory version did
+// (readBy / deliveredTo / engagedBy string arrays per message). Write-
+// through from the prior commit keeps message_receipts current on every
+// POST so this is live-correct, not stale.
 function withReceipts(msgs: Message[]) {
-  return msgs.map(m => ({
-    ...m,
-    readBy: [...(readReceipts.get(m.id) ?? [])],
-    deliveredTo: [...(deliveryReceipts.get(m.id) ?? [])],
-    engagedBy: [...(engagedReceipts.get(m.id) ?? [])],
-  }));
+  if (msgs.length === 0) return [];
+  const ids = msgs.map(m => m.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .query(
+      `SELECT message_id, username, kind FROM message_receipts WHERE message_id IN (${placeholders})`
+    )
+    .all(...ids) as Array<{ message_id: number; username: string; kind: "delivered" | "engaged" | "read" }>;
+  const byMsg = new Map<number, { read: string[]; delivered: string[]; engaged: string[] }>();
+  for (const id of ids) byMsg.set(id, { read: [], delivered: [], engaged: [] });
+  for (const r of rows) {
+    const b = byMsg.get(r.message_id)!;
+    if (r.kind === "read") b.read.push(r.username);
+    else if (r.kind === "delivered") b.delivered.push(r.username);
+    else if (r.kind === "engaged") b.engaged.push(r.username);
+  }
+  return msgs.map(m => {
+    const b = byMsg.get(m.id)!;
+    return { ...m, readBy: b.read, deliveredTo: b.delivered, engagedBy: b.engaged };
+  });
 }
 
 // 2.4.0-dev read-path helper. Loads all messages from SQLite with their
