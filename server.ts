@@ -1132,13 +1132,50 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     padding: 0;
   }
   .msg-reply-count:hover { color: #58a6ff; }
+  .msg-receipts-wrap {
+    position: relative;
+    display: inline-block;
+  }
   .msg-receipts-inline {
     color: #484f58;
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
     max-width: 320px;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    line-height: inherit;
   }
+  .msg-receipts-inline:empty { cursor: default; }
+  .msg-receipts-inline:not(:empty):hover { color: #8b949e; }
+  .msg-receipts-wrap.open .msg-receipts-inline { color: #c9d1d9; }
+  .msg-receipts-panel {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 4px;
+    padding: 6px 10px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    font-size: 1em;
+    color: #c9d1d9;
+    white-space: nowrap;
+    z-index: 20;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .msg-receipts-wrap.open .msg-receipts-panel { display: block; }
+  .msg-receipts-panel-row { padding: 2px 0; }
+  .msg-receipts-panel-label {
+    color: #8b949e;
+    margin-right: 6px;
+    font-weight: 600;
+  }
+  .msg-receipts-panel-empty { color: #484f58; font-style: italic; }
   #replying-to-bar {
     display: none;
     padding: 4px 10px;
@@ -1545,6 +1582,25 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     if (deliveredTo && deliveredTo.length) lines.push('Delivered to ' + deliveredTo.join(', '));
     return lines.join('\\n');
   }
+  function buildReceiptPanelHtml(readBy, engagedBy, deliveredTo) {
+    var rows = [];
+    function row(label, names) {
+      if (!names || !names.length) return;
+      rows.push(
+        '<div class="msg-receipts-panel-row">' +
+          '<span class="msg-receipts-panel-label">' + label + '</span>' +
+          escapeHtml(names.join(', ')) +
+        '</div>'
+      );
+    }
+    row('Read by', readBy);
+    row('Engaged by', engagedBy);
+    row('Delivered to', deliveredTo);
+    if (!rows.length) {
+      return '<div class="msg-receipts-panel-empty">No activity yet</div>';
+    }
+    return rows.join('');
+  }
   function updateReceipts(id, type, name) {
     if (!msgReceipts[id]) msgReceipts[id] = { readBy: [], deliveredTo: [], engagedBy: [] };
     var list = type === 'read' ? msgReceipts[id].readBy
@@ -1556,7 +1612,22 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var r = msgReceipts[id];
     el.textContent = compactReceipts(r.readBy, r.engagedBy);
     el.title = fullReceiptsTitle(r.readBy, r.engagedBy, r.deliveredTo);
+    var panel = document.getElementById('receipts-panel-' + id);
+    if (panel) panel.innerHTML = buildReceiptPanelHtml(r.readBy, r.engagedBy, r.deliveredTo);
   }
+  // Close any open receipts panel when clicking outside or pressing Escape.
+  document.addEventListener('click', function(e) {
+    var openWraps = document.querySelectorAll('.msg-receipts-wrap.open');
+    if (!openWraps.length) return;
+    for (var i = 0; i < openWraps.length; i++) {
+      if (!openWraps[i].contains(e.target)) openWraps[i].classList.remove('open');
+    }
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape') return;
+    var openWraps = document.querySelectorAll('.msg-receipts-wrap.open');
+    for (var i = 0; i < openWraps.length; i++) openWraps[i].classList.remove('open');
+  });
   var userScrolled = false;
   var currentUser = SC_USER;
   var mentionBell = document.getElementById('mention-bell');
@@ -2069,7 +2140,10 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         '<div class="msg-footer">' +
           '<button type="button" class="msg-reply-btn" data-msg-id="' + msg.id + '" title="Reply">\\u21A9</button>' +
           replyCountHtml +
-          '<span class="msg-receipts-inline" id="receipts-' + msg.id + '" title="' + escapeHtml(receiptsTitle) + '">' + escapeHtml(receiptsText) + '</span>' +
+          '<span class="msg-receipts-wrap">' +
+            '<button type="button" class="msg-receipts-inline" id="receipts-' + msg.id + '" title="' + escapeHtml(receiptsTitle) + '" aria-expanded="false" aria-controls="receipts-panel-' + msg.id + '">' + escapeHtml(receiptsText) + '</button>' +
+            '<div class="msg-receipts-panel" id="receipts-panel-' + msg.id + '" role="dialog" aria-label="Receipt details"></div>' +
+          '</span>' +
         '</div>' +
       '</div>';
     msgContentCache[msg.id] = { sender: msg.sender, content: msg.content };
@@ -2137,6 +2211,26 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
             wrapper.style.background = '#1f2937';
             setTimeout(function() { wrapper.style.background = ''; }, 1200);
           }
+        }
+      });
+    }
+    var receiptsBtn = div.querySelector('.msg-receipts-inline');
+    if (receiptsBtn) {
+      receiptsBtn.addEventListener('click', function(e) {
+        if (!receiptsBtn.textContent) return;
+        e.stopPropagation();
+        var wrap = receiptsBtn.parentElement;
+        var panel = document.getElementById('receipts-panel-' + msg.id);
+        var willOpen = !wrap.classList.contains('open');
+        var openWraps = document.querySelectorAll('.msg-receipts-wrap.open');
+        for (var j = 0; j < openWraps.length; j++) openWraps[j].classList.remove('open');
+        if (willOpen) {
+          var r = msgReceipts[msg.id] || { readBy: [], engagedBy: [], deliveredTo: [] };
+          if (panel) panel.innerHTML = buildReceiptPanelHtml(r.readBy, r.engagedBy, r.deliveredTo);
+          wrap.classList.add('open');
+          receiptsBtn.setAttribute('aria-expanded', 'true');
+        } else {
+          receiptsBtn.setAttribute('aria-expanded', 'false');
         }
       });
     }
