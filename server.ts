@@ -1584,12 +1584,18 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   }
   function buildReceiptPanelHtml(readBy, engagedBy, deliveredTo) {
     var rows = [];
+    function renderName(name) {
+      return '<span style="color:' + getSenderColor(name) + ';font-weight:600;">' +
+        escapeHtml(name) + '</span>';
+    }
     function row(label, names) {
       if (!names || !names.length) return;
+      var parts = [];
+      for (var i = 0; i < names.length; i++) parts.push(renderName(names[i]));
       rows.push(
         '<div class="msg-receipts-panel-row">' +
           '<span class="msg-receipts-panel-label">' + label + '</span>' +
-          escapeHtml(names.join(', ')) +
+          parts.join(', ') +
         '</div>'
       );
     }
