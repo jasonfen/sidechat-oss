@@ -25,7 +25,8 @@ db.exec(`
     registered_at TEXT NOT NULL,
     approved_at   TEXT,
     last_seen     TEXT,
-    last_ip       TEXT
+    last_ip       TEXT,
+    auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1
   );
   CREATE TABLE IF NOT EXISTS nonces (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +57,8 @@ db.exec(`
     can_post      INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
     last_seen     TEXT,
-    last_ip       TEXT
+    last_ip       TEXT,
+    auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1
   );
   CREATE TABLE IF NOT EXISTS observer_sessions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +116,8 @@ try { db.exec("ALTER TABLE observer_sessions ADD COLUMN expires_at TEXT"); } cat
 try { db.exec("ALTER TABLE clients ADD COLUMN last_known_version TEXT"); } catch {}
 try { db.exec("ALTER TABLE observers ADD COLUMN role TEXT NOT NULL DEFAULT 'observer'"); } catch {}
 try { db.exec("ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'"); } catch {}
+try { db.exec("ALTER TABLE clients ADD COLUMN auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1"); } catch {}
+try { db.exec("ALTER TABLE observers ADD COLUMN auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1"); } catch {}
 
 // Endpoints an MCP-scoped session (scope='mcp') is allowed to reach. Anything
 // else returns 403 with reason=scope_denied. Full-scoped sessions are
@@ -548,6 +552,20 @@ function parseMentions(content: string): string[] {
     const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`@${escaped}\\b`, "i").test(content);
   });
+}
+
+// Per-user opt-out for "reply to my message implicitly mentions me".
+// Default-on for all clients/observers (admin has no row, defaults on).
+function isAutoMentionOptedOut(username: string): boolean {
+  const c = db.query(
+    "SELECT auto_mention_replies_to_me AS v FROM clients WHERE name = ?"
+  ).get(username) as { v: number } | null;
+  if (c) return c.v === 0;
+  const o = db.query(
+    "SELECT auto_mention_replies_to_me AS v FROM observers WHERE username = ?"
+  ).get(username) as { v: number } | null;
+  if (o) return o.v === 0;
+  return false;
 }
 
 // --- Webhook Delivery ---
@@ -4620,12 +4638,26 @@ app.post("/message", requirePostSession, async (c) => {
     }
   }
 
+  const mentions = parseMentions(body.content);
+  // Reply implicitly @-mentions the parent's author (default-on, per-user opt-out).
+  if (replyToId) {
+    const parentRow = db.query(
+      "SELECT sender FROM messages WHERE id = ?"
+    ).get(replyToId) as { sender: string } | null;
+    const parentSender = parentRow?.sender;
+    if (parentSender && parentSender !== sender && !isAutoMentionOptedOut(parentSender)) {
+      const lower = parentSender.toLowerCase();
+      if (!mentions.some(m => m.toLowerCase() === lower)) {
+        mentions.push(parentSender);
+      }
+    }
+  }
   const msg: Message = {
     id: ++messageCounter,
     timestamp: new Date().toISOString(),
     sender,
     content: body.content,
-    mentions: parseMentions(body.content),
+    mentions,
     files,
     reply_to_id: replyToId,
   };
