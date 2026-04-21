@@ -102,9 +102,16 @@ if $USE_BINARY; then
 
     if [[ ! -x "$CACHED_BIN" ]]; then
       echo "Probing GitHub Releases for sidechat-mcp-${PLATFORM} (${REL_TAG})..."
-      _api="https://api.github.com/repos/${RELEASE_REPO}/releases"
-      if [[ "$REL_TAG" == "latest" ]]; then _api="$_api/latest"; else _api="$_api/tags/$REL_TAG"; fi
+      _api_base="https://api.github.com/repos/${RELEASE_REPO}/releases"
+      if [[ "$REL_TAG" == "latest" ]]; then _api="$_api_base/latest"; else _api="$_api_base/tags/$REL_TAG"; fi
       _meta=$(curl -fsSL --max-time 10 "$_api" 2>/dev/null || true)
+      # Resilience: if the tagged release is missing (server's expected_sha
+      # points at a version not yet released, or a rollback situation),
+      # fall back to /releases/latest with a warning so drift is visible.
+      if [[ -z "$_meta" && "$REL_TAG" != "latest" ]]; then
+        echo "  WARN: release $REL_TAG not found; falling back to /releases/latest." >&2
+        _meta=$(curl -fsSL --max-time 10 "$_api_base/latest" 2>/dev/null || true)
+      fi
       _bin_url=$(echo "$_meta" | jq -r ".assets[]? | select(.name==\"sidechat-mcp-${PLATFORM}\") | .browser_download_url" 2>/dev/null || true)
       _sums_url=$(echo "$_meta" | jq -r '.assets[]? | select(.name=="SHA256SUMS") | .browser_download_url' 2>/dev/null || true)
       if [[ -n "$_bin_url" && "$_bin_url" != "null" ]]; then
