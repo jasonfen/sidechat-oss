@@ -67,7 +67,7 @@ fi
 # Update hooks
 echo "Updating hooks..."
 mkdir -p "$SCRIPT_DIR/hooks"
-for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh; do
   if curl -fsSL "$SERVER_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/hooks/$hook.new" "$SCRIPT_DIR/hooks/$hook"
     chmod +x "$SCRIPT_DIR/hooks/$hook"
@@ -91,11 +91,15 @@ if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
   MSG_HOOK="$SCRIPT_DIR/hooks/post-message.sh"
   MENTION_HOOK="$SCRIPT_DIR/hooks/on-new-mentions.sh"
   SESSIONSTART_HOOK="$SCRIPT_DIR/hooks/sessionstart-poll.sh"
+  STOP_HOOK="$SCRIPT_DIR/hooks/stop-poll.sh"
   CANONICAL=$(cat <<CANON
 {
   "hooks": {
     "SessionStart": [
       {"hooks": [{"type": "command", "command": "$SESSIONSTART_HOOK", "timeout": 10}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "$STOP_HOOK", "timeout": 10}]}
     ],
     "FileChanged": [
       {"matcher": ".sidechat/new-mentions.txt",

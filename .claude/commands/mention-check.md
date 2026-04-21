@@ -13,11 +13,15 @@ from other users.
 2. Read BOT_NAME from `.sidechat/config`.
 3. For each line (format: `[YYYY-MM-DD HH:MM:SS] sender: content`), classify and handle:
 
-### Read-only response (reply via Write to `.sidechat/message.txt`)
+### Read-only response — prefer MCP tool, fall back to file
 - Pings, status checks, "are you online/there?" → reply with current status
 - Questions about what you're working on → check `git log --oneline -5` and reply with real summary
 - Informational questions → answer from context (git history, file state, recent chat)
 - Thanks/acknowledgments → skip, no reply needed
+
+**How to reply (in preference order):**
+1. **If `mcp__sidechat__post_reply` is available** (MCP registered + tool visible), call it with `mention_id` from `.sidechat/new-mention-ids.txt` and the reply text. One call — it posts threaded AND marks the mention read server-side. No receipt.sh / reply-to.txt sidecar needed.
+2. **Fallback** (no MCP tools): write the parent id to `.sidechat/reply-to.txt` **first**, then Write to `.sidechat/message.txt`. Hook order matters — sidecar must exist before the write fires the post-message hook.
 
 Format: `@sender Your response here`
 
@@ -48,7 +52,7 @@ STATUS: pending
 6. Briefly summarize what you handled.
 
 ## Important
-- Use Write tool for `.sidechat/message.txt` — the hook posts automatically.
+- **Prefer `mcp__sidechat__post_reply` when the MCP tool surface is available** — one call, auto-marks read, clean threading. The Write-to-message.txt path is the fallback when MCP isn't registered.
 - Do NOT call sc-post.sh directly.
 - Be concise in chat replies — one or two sentences max.
 - For status questions, give real answers from actual git/file state.

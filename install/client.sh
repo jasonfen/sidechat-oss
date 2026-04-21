@@ -125,7 +125,7 @@ if [[ "$FORCE" == "true" && -f "$SCRIPT_DIR/config" ]]; then
 fi
 
 # Download hooks
-for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh; do
   curl -fsSL "$SIDECHAT_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook"
   chmod +x "$SCRIPT_DIR/hooks/$hook"
   echo "  $SCRIPT_DIR/hooks/$hook"
@@ -353,6 +353,7 @@ PUSH_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-push.sh"
 MSG_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-message.sh"
 MENTION_HOOK="$(pwd)/$SCRIPT_DIR/hooks/on-new-mentions.sh"
 SESSIONSTART_HOOK="$(pwd)/$SCRIPT_DIR/hooks/sessionstart-poll.sh"
+STOP_HOOK="$(pwd)/$SCRIPT_DIR/hooks/stop-poll.sh"
 
 # Build the desired settings config (hooks + permissions for background agent)
 HOOKS_JSON=$(cat <<HOOKEOF
@@ -379,6 +380,17 @@ HOOKS_JSON=$(cat <<HOOKEOF
           {
             "type": "command",
             "command": "$SESSIONSTART_HOOK",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$STOP_HOOK",
             "timeout": 10
           }
         ]
