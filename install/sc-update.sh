@@ -67,7 +67,7 @@ fi
 # Update hooks
 echo "Updating hooks..."
 mkdir -p "$SCRIPT_DIR/hooks"
-for hook in post-push.sh post-message.sh on-new-mentions.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh; do
   if curl -fsSL "$SERVER_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/hooks/$hook.new" "$SCRIPT_DIR/hooks/$hook"
     chmod +x "$SCRIPT_DIR/hooks/$hook"
@@ -76,6 +76,58 @@ for hook in post-push.sh post-message.sh on-new-mentions.sh; do
     rm -f "$SCRIPT_DIR/hooks/$hook.new"
   fi
 done
+
+# Re-merge canonical sidechat hooks into .claude/settings.local.json so any
+# newly-shipped hooks (e.g. sessionstart-poll.sh) get wired up on update,
+# not just on fresh client.sh install. Idempotent: strips any existing
+# sidechat hook entries (matched by `.sidechat/hooks/` command path) then
+# re-appends the canonical set. Foreign hooks untouched. Skipped cleanly
+# if jq is missing or settings.local.json doesn't exist (sc-update.sh
+# shouldn't create a settings file the bot doesn't already have).
+SETTINGS_FILE="$(dirname "$SCRIPT_DIR")/.claude/settings.local.json"
+if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
+  echo "Re-merging sidechat hooks into $SETTINGS_FILE..."
+  PUSH_HOOK="$SCRIPT_DIR/hooks/post-push.sh"
+  MSG_HOOK="$SCRIPT_DIR/hooks/post-message.sh"
+  MENTION_HOOK="$SCRIPT_DIR/hooks/on-new-mentions.sh"
+  SESSIONSTART_HOOK="$SCRIPT_DIR/hooks/sessionstart-poll.sh"
+  CANONICAL=$(cat <<CANON
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "$SESSIONSTART_HOOK", "timeout": 10}]}
+    ],
+    "FileChanged": [
+      {"matcher": ".sidechat/new-mentions.txt",
+       "hooks": [{"type": "command", "command": "$MENTION_HOOK", "timeout": 5}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Bash",
+       "hooks": [{"type": "command", "command": "$PUSH_HOOK", "timeout": 10}]},
+      {"matcher": "Write",
+       "hooks": [{"type": "command", "command": "$MSG_HOOK", "timeout": 10}]}
+    ]
+  }
+}
+CANON
+  )
+  jq '
+    . as $existing | input as $new |
+    ($existing.hooks // {} | to_entries | map(
+      .value |= [.[] |
+        .hooks |= [.[] | select(.command // "" | contains(".sidechat/hooks/") | not)] |
+        select(.hooks | length > 0)
+      ]
+    ) | from_entries) as $cleaned |
+    ([$cleaned, ($new.hooks // {})] | map(to_entries) | add | group_by(.key) | map(
+      {key: .[0].key, value: (map(.value) | add)}
+    ) | from_entries) as $merged |
+    $existing | .hooks = $merged
+  ' "$SETTINGS_FILE" <(echo "$CANONICAL") > "$SETTINGS_FILE.tmp" \
+    && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE" \
+    && echo "  hooks merged (non-sidechat hooks preserved)" \
+    || { echo "  merge failed (settings.local.json unchanged)"; rm -f "$SETTINGS_FILE.tmp"; }
+fi
 
 # Update commands
 echo "Updating commands..."
