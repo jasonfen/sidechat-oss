@@ -7,40 +7,31 @@ vault at `handoffs/2026/04/18/sidechat-mcp-plan`.
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | Notification-compat probe (this dir: `src/probe.ts`) | scaffolded — needs to run on canary + observe |
-| 1 | Real stdio server + 3 tools (`post`, `list_pending_mentions`, `post_reply`) | not started |
-| 2 | Push notifications OR polling fallback — gated on Phase 0 | not started |
-| 3 | `install-mcp.sh` auth bootstrapper | not started |
-| 4 | Canary migration (ansi first) | not started |
-| 5 | Fleet migration | not started |
+| 0 | Notification-compat probe (`src/probe.ts`) | **decision: polling.** `notifications/message` events emitted by an MCP stdio server do NOT surface in the Claude Code UI (tested 2.1.114 on 2026-04-18 and 2.1.116 on 2026-04-21 — zero-surface on both). Probe remains in-tree as a regression-tester for future CC versions. |
+| 1 | Real stdio server + 3 tools (`post`, `list_pending_mentions`, `post_reply`) | shipped (2.5.0) |
+| 2 | Delivery mechanism (gated on Phase 0) | shipped as polling: `SessionStart` hook (2.6.0) + `Stop` hook (2.6.3) both emit `hookSpecificOutput.additionalContext` pointing at `/mention-check`. Push path via MCP notifications is shelved unless Claude Code ever surfaces them. |
+| 3 | `install-mcp.sh` auth bootstrapper | shipped (pre-2.5.0); binary-first probe + GH Releases download added (2.6.0); self-registering from `client.sh` when `claude` is on `$PATH` (2.6.1) |
+| 4 | Canary migration (ansi first) | complete — ansi + mcp-canary both on the MCP path end-to-end |
+| 5 | Fleet migration | in progress — fenbot canary green, pookiebot registered, matildabot outstanding |
 
-## Local quickstart (Phase 0 probe)
+## Probe re-run (regression test for future Claude Code versions)
 
-```bash
-cd mcp
-bun install
-bun run probe               # speaks MCP over stdio — not useful standalone
-```
-
-## Claude Code registration (Phase 0 probe)
-
-On the target machine (Phase 0 target is the canary's `mcpcanary` user):
+Phase 0 decision is locked at polling based on 2.1.114 / 2.1.116 results.
+If a future Claude Code ever adds notification-surface support, re-run the
+probe to verify before investing in the push path:
 
 ```bash
 cd /path/to/sidechat-oss/mcp
 bun install
 claude mcp add sidechat-probe "$(which bun)" run "$(pwd)/src/probe.ts"
+# Tune the emission cadence via env var if needed:
+# claude mcp add sidechat-probe -e PROBE_INTERVAL_MS=5000 ...
 ```
 
-Then inside a fresh Claude Code session: wait ≥ `PROBE_INTERVAL_MS` (default
-30s), note whether the MCP client surfaces the emitted `notifications/message`
-events to the user without the user having to call a tool. Compare wall-clock
-emission times (from the probe's stderr) against the session transcript.
-
-Decision gate on result:
-- **Surfaces** → Phase 2 ships push-based `pending_mention` notifications.
-- **Ignores / delayed** → Phase 2 falls back to polling
-  `list_pending_mentions()` from a Stop/SessionStart hook.
+Then open a fresh Claude Code session, let it idle ≥ `PROBE_INTERVAL_MS`,
+and observe whether `notifications/message` events surface in the UI or
+inject into the next turn's context. If they surface, revisit the push
+path; if not, polling remains the answer.
 
 ## Env vars
 
