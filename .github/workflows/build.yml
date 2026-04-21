@@ -43,3 +43,48 @@ jobs:
             BUILD_SHA=${{ env.SHORT_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  mcp-binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Read version
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Install MCP deps
+        run: bun install --cwd mcp
+
+      - name: Compile binaries for all targets
+        run: |
+          mkdir -p dist/mcp
+          for t in bun-linux-x64 bun-linux-arm64 bun-darwin-x64 bun-darwin-arm64; do
+            name="sidechat-mcp-${t#bun-}"
+            bun build --compile --target=$t mcp/src/server.ts --outfile "dist/mcp/$name"
+          done
+          (cd dist/mcp && sha256sum sidechat-mcp-* > SHA256SUMS)
+          ls -lh dist/mcp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-binaries-v${{ env.VERSION }}
+          path: dist/mcp/
+          retention-days: 90
+
+      - name: Create release on first push of this version (idempotent — skipped if release already exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists — skipping upload. Bump package.json version to cut a new release."
+            exit 0
+          fi
+          gh release create "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --title "v${VERSION}" \
+            --notes "MCP client binaries for v${VERSION}. Install via mcp/install-mcp.sh." \
+            dist/mcp/sidechat-mcp-* dist/mcp/SHA256SUMS
