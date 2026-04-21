@@ -20,8 +20,11 @@ CONFIG="$SCRIPT_DIR/config"
 source "$CONFIG"
 [ -n "${TOKEN:-}" ] && [ -n "${SERVER_URL:-}" ] || exit 0
 
+# Bound the lookback window — defense-in-depth against receipt-table drift
+# or legacy backlog dumps. Default 72h; `SIDECHAT_POLL_HOURS` env var overrides.
+HOURS="${SIDECHAT_POLL_HOURS:-72}"
 RESPONSE="$(curl -sf --max-time 5 -H "Authorization: Bearer $TOKEN" \
-  "$SERVER_URL/messages/pending-mentions" 2>/dev/null)" || exit 0
+  "$SERVER_URL/messages/pending-mentions?since_hours=${HOURS}" 2>/dev/null)" || exit 0
 
 COUNT="$(printf '%s' "$RESPONSE" | jq -r '.count // 0' 2>/dev/null || echo 0)"
 [ "$COUNT" -gt 0 ] || exit 0

@@ -119,6 +119,55 @@ try { db.exec("ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'full
 try { db.exec("ALTER TABLE clients ADD COLUMN auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1"); } catch {}
 try { db.exec("ALTER TABLE observers ADD COLUMN auto_mention_replies_to_me INTEGER NOT NULL DEFAULT 1"); } catch {}
 
+// One-time backfill (2.6.4): mark all pre-2.4.0 messages as `read` for every
+// active client/observer. The 2.4.0 migration (af7b1db) built the receipt
+// table and backfilled messages but did NOT retroactively mark anyone's
+// historical mentions as read, so every pre-2026-04-19 mention sat in
+// perpetual pending for every active bot. Symptom caught 2026-04-21 when
+// fenbot and ansi both hit 70+/213+ mention backlogs on /mention-check.
+// Idempotent via settings-table marker — if it ran once, skip forever.
+try {
+  const markerKey = "backfill_markers.read_gap_v2_4_0";
+  const existing = db.query("SELECT value FROM settings WHERE key = ?").get(markerKey) as { value: string } | undefined;
+  if (!existing) {
+    const cutoff = "2026-04-19T00:00:00Z"; // 2.4.0 ship date
+    const activeClientNames = (db.query("SELECT name FROM clients WHERE status = 'active'").all() as any[]).map(r => r.name as string);
+    const activeObserverNames = (db.query("SELECT username FROM observers WHERE status = 'active'").all() as any[]).map(r => r.username as string);
+    const activeUsers = new Set<string>([...activeClientNames, ...activeObserverNames]);
+    const ts = new Date().toISOString();
+    const insertReceipt = db.prepare(
+      "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, 'read', ?)"
+    );
+    let backfilled = 0;
+    const tx = db.transaction(() => {
+      const rows = db.query(
+        "SELECT id, mentions FROM messages WHERE timestamp < ?"
+      ).all(cutoff) as Array<{ id: number; mentions: string }>;
+      for (const row of rows) {
+        let mentions: string[] = [];
+        try { mentions = JSON.parse(row.mentions || "[]"); } catch {}
+        for (const u of mentions) {
+          if (activeUsers.has(u)) {
+            const r = insertReceipt.run(row.id, u, ts);
+            if (r.changes > 0) backfilled++;
+          }
+        }
+      }
+    });
+    tx();
+    const markerValue = JSON.stringify({
+      completed_at: new Date().toISOString(),
+      cutoff,
+      active_user_count: activeUsers.size,
+      receipts_inserted: backfilled,
+    });
+    db.run("INSERT INTO settings (key, value) VALUES (?, ?)", [markerKey, markerValue]);
+    console.log(`[migration] read_gap_v2_4_0 backfill: ${backfilled} read receipts inserted for ${activeUsers.size} active users (cutoff ${cutoff})`);
+  }
+} catch (err) {
+  console.error("[migration] read_gap_v2_4_0 backfill failed:", err);
+}
+
 // Endpoints an MCP-scoped session (scope='mcp') is allowed to reach. Anything
 // else returns 403 with reason=scope_denied. Full-scoped sessions are
 // unrestricted. Method-path pairs; `:id` and `:fp` bind any path segment.
@@ -161,7 +210,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.3";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.4";
 
 // --- Config from env ---
 
@@ -4916,7 +4965,19 @@ app.get("/messages/all", requireSessionOrObserver, (c) => {
 app.get("/messages/pending-mentions", requireSession, (c) => {
   const client = c.get("client") as any;
   const me = client.name as string;
-  const sinceRaw = c.req.query("since");
+  let sinceRaw = c.req.query("since");
+  // Convenience alias: `?since_hours=N` → since = now - N hours. Lets shell
+  // clients avoid cross-platform date math (GNU vs BSD date syntax). Non-
+  // positive values disable the filter (matches MCP tool semantics).
+  if (!sinceRaw) {
+    const sinceHoursRaw = c.req.query("since_hours");
+    if (sinceHoursRaw != null) {
+      const n = Number(sinceHoursRaw);
+      if (Number.isFinite(n) && n > 0) {
+        sinceRaw = new Date(Date.now() - n * 3600 * 1000).toISOString();
+      }
+    }
+  }
 
   // 2.4.0-dev fifth read-path migration: SQL anti-join to find un-read mentions.
   // `json_each(m.mentions)` unpacks the JSON array per message; the DISTINCT
