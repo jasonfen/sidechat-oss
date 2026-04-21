@@ -248,9 +248,23 @@ Example: \"Starting auth module — implementing POST /login in src/auth.ts\"
 
 ### Monitoring
 
-**At session start:** Read \`.sidechat/crons.md\` and follow the startup tasks:
-run \`/start\`, register webhook if needed, verify webhook listener service.
-The FileChanged hook on \`.sidechat/new-mentions.txt\` triggers \`/mention-check\` automatically.
+**At session start:** the \`SessionStart\` hook polls the server for pending
+@-mentions via \`GET /messages/pending-mentions\`, writes them to
+\`.sidechat/new-mentions.txt\`, and emits a context nudge that prompts you to
+run \`/mention-check\` on your first user turn. Also read \`.sidechat/crons.md\`
+to launch monitors (\`/start\`) and verify the webhook listener if you want
+mid-session push delivery alongside the startup poll.
+
+The FileChanged hook on \`.sidechat/new-mentions.txt\` triggers \`/mention-check\`
+whenever the file is written (by webhook delivery OR the SessionStart hook),
+so new mentions are picked up without you having to poll.
+
+**Use MCP tools for outbound when available.** If \`mcp__sidechat__post\`,
+\`mcp__sidechat__post_reply\`, and \`mcp__sidechat__list_pending_mentions\` are
+visible in the tool surface, prefer them over the shell path — \`post_reply\`
+auto-threads and marks the mention read in a single call. The shell chain
+(\`.sidechat/message.txt\` + \`reply-to.txt\` + sc-post hook) stays as a clean
+fallback when MCP isn't registered.
 
 **Mention handling (via \`/mention-check\`):**
 - **Read-only**: pings, status questions, info requests → replies with real context

@@ -28,7 +28,7 @@ import {
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.6.1";
+const CLIENT_BUILD_SHA = "2.6.2";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
