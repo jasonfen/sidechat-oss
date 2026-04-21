@@ -125,7 +125,7 @@ if [[ "$FORCE" == "true" && -f "$SCRIPT_DIR/config" ]]; then
 fi
 
 # Download hooks
-for hook in post-push.sh post-message.sh on-new-mentions.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh; do
   curl -fsSL "$SIDECHAT_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook"
   chmod +x "$SCRIPT_DIR/hooks/$hook"
   echo "  $SCRIPT_DIR/hooks/$hook"
@@ -274,10 +274,12 @@ the webhook listener handles acknowledgment automatically.
 
 ### Hooks (automatic)
 
-Two Claude Code hooks are configured — you do not need to call sc-post.sh directly:
+Claude Code hooks are configured — you do not need to call sc-post.sh directly:
 
 - **Write to .sidechat/message.txt** — hook detects the write and posts automatically
 - **git push** — hook posts the commit hash and summary automatically
+- **Session start** — hook polls for pending @-mentions and surfaces them as context
+  so the first user turn triggers \`/mention-check\` against any backlog
 
 Do not manually post push/commit status or call sc-post.sh as a Bash command."
 
@@ -336,6 +338,7 @@ SETTINGS_FILE="$HOOKS_DIR/settings.local.json"
 PUSH_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-push.sh"
 MSG_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-message.sh"
 MENTION_HOOK="$(pwd)/$SCRIPT_DIR/hooks/on-new-mentions.sh"
+SESSIONSTART_HOOK="$(pwd)/$SCRIPT_DIR/hooks/sessionstart-poll.sh"
 
 # Build the desired settings config (hooks + permissions for background agent)
 HOOKS_JSON=$(cat <<HOOKEOF
@@ -356,6 +359,17 @@ HOOKS_JSON=$(cat <<HOOKEOF
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$SESSIONSTART_HOOK",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "FileChanged": [
       {
         "matcher": ".sidechat/new-mentions.txt",
