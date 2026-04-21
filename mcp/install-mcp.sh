@@ -105,15 +105,30 @@ if $USE_BINARY; then
       _api_base="https://api.github.com/repos/${RELEASE_REPO}/releases"
       if [[ "$REL_TAG" == "latest" ]]; then _api="$_api_base/latest"; else _api="$_api_base/tags/$REL_TAG"; fi
       _meta=$(curl -fsSL --max-time 10 "$_api" 2>/dev/null || true)
-      # Resilience: if the tagged release is missing (server's expected_sha
-      # points at a version not yet released, or a rollback situation),
-      # fall back to /releases/latest with a warning so drift is visible.
-      if [[ -z "$_meta" && "$REL_TAG" != "latest" ]]; then
-        echo "  WARN: release $REL_TAG not found; falling back to /releases/latest." >&2
-        _meta=$(curl -fsSL --max-time 10 "$_api_base/latest" 2>/dev/null || true)
+      _bin_url=""
+      _sums_url=""
+      if [[ -n "$_meta" ]]; then
+        _bin_url=$(echo "$_meta" | jq -r ".assets[]? | select(.name==\"sidechat-mcp-${PLATFORM}\") | .browser_download_url" 2>/dev/null || true)
+        _sums_url=$(echo "$_meta" | jq -r '.assets[]? | select(.name=="SHA256SUMS") | .browser_download_url' 2>/dev/null || true)
       fi
-      _bin_url=$(echo "$_meta" | jq -r ".assets[]? | select(.name==\"sidechat-mcp-${PLATFORM}\") | .browser_download_url" 2>/dev/null || true)
-      _sums_url=$(echo "$_meta" | jq -r '.assets[]? | select(.name=="SHA256SUMS") | .browser_download_url' 2>/dev/null || true)
+      # Resilience: fall back to /releases/latest in two cases, both with a
+      # warning so drift stays diagnosable:
+      #   1. The tagged release 404s (server points at a version not yet
+      #      released, or a rollback situation).
+      #   2. The tagged release exists but has no platform-matching asset
+      #      (pre-binary-pipeline releases, or partial platform coverage).
+      if [[ "$REL_TAG" != "latest" && ( -z "$_meta" || -z "$_bin_url" || "$_bin_url" == "null" ) ]]; then
+        if [[ -z "$_meta" ]]; then
+          echo "  WARN: release $REL_TAG not found; falling back to /releases/latest." >&2
+        else
+          echo "  WARN: release $REL_TAG has no sidechat-mcp-${PLATFORM} asset; falling back to /releases/latest." >&2
+        fi
+        _meta=$(curl -fsSL --max-time 10 "$_api_base/latest" 2>/dev/null || true)
+        if [[ -n "$_meta" ]]; then
+          _bin_url=$(echo "$_meta" | jq -r ".assets[]? | select(.name==\"sidechat-mcp-${PLATFORM}\") | .browser_download_url" 2>/dev/null || true)
+          _sums_url=$(echo "$_meta" | jq -r '.assets[]? | select(.name=="SHA256SUMS") | .browser_download_url' 2>/dev/null || true)
+        fi
+      fi
       if [[ -n "$_bin_url" && "$_bin_url" != "null" ]]; then
         if curl -fsSL --max-time 60 "$_bin_url" -o "$CACHED_BIN.partial" 2>/dev/null; then
           if [[ -n "$_sums_url" && "$_sums_url" != "null" ]] \
