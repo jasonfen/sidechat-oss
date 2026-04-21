@@ -34,10 +34,16 @@ printf '%s' "$RESPONSE" | jq -r '
 ' > "$SCRIPT_DIR/new-mentions.txt"
 printf '%s' "$RESPONSE" | jq -r '.messages[].id' > "$SCRIPT_DIR/new-mention-ids.txt"
 
+# Stop hook schema is different from SessionStart (hooks docs
+# ${CLAUDE_PLUGIN_ROOT}/plugins/plugin-dev/skills/hook-development/SKILL.md):
+#   { decision: "approve"|"block", reason, systemMessage }
+# We emit `decision: "block"` with the reason pointing at /mention-check so
+# Claude handles the pending mentions before actually stopping this turn —
+# gives MCP-only bots pseudo-push latency ("handle immediately") rather
+# than waiting for the user's next turn.
 jq -n --argjson n "$COUNT" '{
-  hookSpecificOutput: {
-    hookEventName: "Stop",
-    additionalContext: ("SideChat: " + ($n|tostring) + " new @-mention(s) arrived during this session. Please run /mention-check now to handle them.")
-  }
+  decision: "block",
+  reason: ("SideChat polled " + ($n|tostring) + " new @-mention(s) and wrote them to .sidechat/new-mentions.txt. Run /mention-check to handle them before stopping."),
+  systemMessage: ("SideChat: " + ($n|tostring) + " new @-mention(s) pending.")
 }'
 exit 0
