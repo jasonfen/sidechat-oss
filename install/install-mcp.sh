@@ -169,15 +169,16 @@ if [[ -z "$MCP_BIN" ]]; then
   # Locate the MCP server source tree. Preference order:
   #   1. --server-src-dir flag
   #   2. $SIDECHAT_OSS_DIR env var
-  #   3. <script dir>/.. (when this script lives inside a sidechat-oss clone)
+  #   3. <script dir>/../mcp (when this script lives at install/install-mcp.sh
+  #      inside a sidechat-oss clone)
   #   4. error
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [[ -n "$SERVER_SRC_DIR_OVERRIDE" ]]; then
     MCP_SRC_DIR="$SERVER_SRC_DIR_OVERRIDE"
   elif [[ -n "${SIDECHAT_OSS_DIR:-}" && -f "$SIDECHAT_OSS_DIR/mcp/src/server.ts" ]]; then
     MCP_SRC_DIR="$SIDECHAT_OSS_DIR/mcp"
-  elif [[ -f "$SCRIPT_DIR/src/server.ts" ]]; then
-    MCP_SRC_DIR="$SCRIPT_DIR"
+  elif [[ -f "$SCRIPT_DIR/../mcp/src/server.ts" ]]; then
+    MCP_SRC_DIR="$(cd "$SCRIPT_DIR/../mcp" && pwd)"
   else
     echo "ERROR: no binary available for this platform and couldn't find mcp/src/server.ts." >&2
     echo "  Pass --server-src-dir <path>, set SIDECHAT_OSS_DIR, or wait for a release build." >&2

@@ -112,7 +112,7 @@ done
 
 mkdir -p "$SCRIPT_DIR" "$SCRIPT_DIR/hooks"
 echo "Downloading shell scripts to $SCRIPT_DIR/..."
-for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh; do
+for script in sc-post.sh sc-poll.sh sc-notify.sh sc-auth.sh sc-listen.sh sc-mention-watcher.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh; do
   curl -fsSL "$SIDECHAT_URL/install/$script" -o "$SCRIPT_DIR/$script"
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"
@@ -498,18 +498,41 @@ fi
 
 # --- Done ---
 
+# Helper: register/refresh MCP when we have an approved + authenticated
+# client and `claude` CLI is available. Skipped cleanly if claude isn't on
+# PATH (the shell-only install still works; user can run install-mcp.sh
+# later when they install Claude Code).
+register_mcp_if_ready() {
+  if ! command -v claude &>/dev/null; then
+    echo ""
+    echo "Note: \`claude\` CLI not found on PATH — skipping MCP registration."
+    echo "  Install Claude Code, then run: .sidechat/install-mcp.sh --apply"
+    return 0
+  fi
+  if [[ ! -x "$SCRIPT_DIR/install-mcp.sh" ]]; then
+    echo "Note: install-mcp.sh missing from $SCRIPT_DIR — skipping MCP registration."
+    return 0
+  fi
+  echo ""
+  echo "Registering MCP server with Claude Code..."
+  SIDECHAT_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-mcp.sh" --apply --name sidechat \
+    || echo "  (MCP registration returned non-zero — run .sidechat/install-mcp.sh --apply manually to retry)"
+}
+
 echo ""
 if [[ "$FRESH_INSTALL" == "true" && "$FORCE" == "true" ]]; then
   echo "=== SideChat re-installed (--force) ==="
   echo "Fingerprint: ${FINGERPRINT:0:16}..."
   echo "Authenticating..."
   "$SCRIPT_DIR/sc-auth.sh"
+  register_mcp_if_ready
 elif [[ "$FRESH_INSTALL" == "true" ]]; then
   echo "=== Registration submitted ==="
   echo "Fingerprint: ${FINGERPRINT:0:16}..."
   echo ""
   echo "Awaiting admin approval. Once approved, run:"
-  echo "  .sidechat/sc-auth.sh"
+  echo "  .sidechat/sc-auth.sh               # mint session token"
+  echo "  .sidechat/install-mcp.sh --apply   # register the MCP server"
   echo ""
   echo "After authentication:"
   echo "  Post:    .sidechat/sc-post.sh \"message\""
@@ -518,4 +541,5 @@ elif [[ "$FRESH_INSTALL" == "true" ]]; then
 else
   echo "=== SideChat updated ==="
   echo "Scripts, hooks, and CLAUDE.md refreshed. Config and token preserved."
+  register_mcp_if_ready
 fi
