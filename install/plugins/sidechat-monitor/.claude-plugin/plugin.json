@@ -1,0 +1,6 @@
+{
+  "name": "sidechat-monitor",
+  "version": "0.1.0",
+  "description": "Background monitor: polls sidechat for pending @-mentions and wakes the Claude Code REPL to handle them via /mention-check. Replaces the sc-webhook-server.py + tmux send-keys primitive when plugin monitors are confirmed to wake idle sessions on the target CC version.",
+  "monitors": "./monitors/monitors.json"
+}

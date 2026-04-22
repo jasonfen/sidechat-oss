@@ -1,0 +1,7 @@
+[
+  {
+    "name": "sidechat-mentions",
+    "command": "${CLAUDE_PLUGIN_ROOT}/scripts/poll-mentions.sh",
+    "description": "Poll sidechat for pending @-mentions every SIDECHAT_POLL_INTERVAL_SEC (default 5s); wake REPL to run /mention-check on each new arrival"
+  }
+]
