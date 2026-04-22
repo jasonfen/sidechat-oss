@@ -1,2 +1,6 @@
 [install]
-minimumReleaseAge = "72h"
+# 72 hours (259200 seconds). Pre-Bun-1.4 rejects the "72h" string form —
+# compiled MCP binaries spawned from this CWD (sidechat-mcp) load this
+# file at startup and exit on parse error. Keep as integer seconds until
+# the floor Bun version is pinned to >=1.4 across all bots.
+minimumReleaseAge = 259200
