@@ -130,15 +130,32 @@ what it thinks it is:
    If the plugin silently fails to start the monitor (manifest parse
    error, wrong schema version), observation measures nothing useful.
 
-## Results template
+## Results log
 
 Append one row per variant per run. Keep the raw tmux captures in
 `results/` alongside.
 
 | Date | CC version | Sidechat version | Variant | Observed behavior | Classification | Evidence |
 |---|---|---|---|---|---|---|
-| YYYY-MM-DD | 2.1.X | 2.6.X | A | (paste 1-2 transcript lines) | H0 / H1 / H2 | `results/probe-a-YYYYMMDD-HHMMSS.log` |
-| YYYY-MM-DD | 2.1.X | 2.6.X | B | (paste 1-2 transcript lines) | H0 / H1 / H2 | `results/probe-b-YYYYMMDD-HHMMSS.log` |
+| 2026-04-21 | 2.1.116 | 2.6.5 | A | 14 consecutive wakes over ~140s; each `PROBE_TICK` emission spawned a turn; Claude self-summarized by seq=10 | **H1** | [`probe-a-20260421-211006.log`](results/probe-a-20260421-211006.log) |
+| 2026-04-21 | 2.1.117 | 2.6.5 | B | Mention 51827 posted from fenbot-UAT; monitor stdout woke REPL; Claude classified H1 in-session; delivery shape identified as `<task-notification>` with embedded `<event>` line (NOT system-reminder or hook payload). CC auto-upgraded from 2.1.116 → 2.1.117 between variants — confound noted but both still H1. | **H1** | [`probe-b-20260421-211120-final.log`](results/probe-b-20260421-211120-final.log) |
+
+**Current verdict: H1 ∧ H1 (both variants wake idle REPL).** Per the
+decision matrix in §Decision matrix, the plugin-monitor surface is a
+viable wake-from-idle primitive and can potentially replace the
+`sc-webhook-server.py` + `tmux send-keys` chain.
+
+**Retirement recommendation (fenbot, 2026-04-21): NOT YET.** Want (a)
+at least one more CC-release regression run showing stable H1, and
+(b) validation that the sidechat server's push path can produce
+structured wake events. Webhook+tmux stays as the immediacy primitive
+until both conditions met.
+
+**Known issue surfaced in 2026-04-21 run:** the pre-dedup version of
+`scripts/poll-mentions.sh` re-emitted the same mention id on every
+5s poll (conflating "new event" with "poll tick"). Fixed post-run —
+script now tracks emitted ids in a `mktemp` tmpfile for its
+lifetime. Future probe runs pick up the fix automatically.
 
 After each entry, write a one-paragraph verdict linked from
 `state-of-sidechat.md §3` as an additional Can / Can't bullet.
