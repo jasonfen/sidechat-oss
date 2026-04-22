@@ -24,18 +24,20 @@
 
 set -euo pipefail
 
-SIDECHAT_DIR="${SIDECHAT_DIR:-}"
-if [[ -z "$SIDECHAT_DIR" ]]; then
-  if [[ -f "$PWD/.sidechat/config" ]]; then
-    SIDECHAT_DIR="$PWD/.sidechat"
-  elif [[ -f "$HOME/.sidechat/config" ]]; then
-    SIDECHAT_DIR="$HOME/.sidechat"
-  else
-    echo "sidechat-monitor: no .sidechat/config found in \$PWD or \$HOME; set SIDECHAT_DIR env to override" >&2
-    # Background monitor — exit cleanly rather than loop-failing. Plugin
-    # registration stays intact; restart resolves config once it exists.
-    exit 0
+# Config resolution is shared with /mention-check via resolve-sidechat-dir.sh —
+# single source of truth means plugin and slash command agree on which install
+# they're talking to regardless of where Claude Code was launched from.
+# Try the resolver from likely install dirs ($PWD-relative, then $HOME); exit
+# 0 if nothing found (background monitor — keep plugin registration intact,
+# next restart resolves once config exists).
+for _resolver in "$PWD/.sidechat/resolve-sidechat-dir.sh" "$HOME/.sidechat/resolve-sidechat-dir.sh"; do
+  if [[ -x "$_resolver" ]]; then
+    eval "$("$_resolver" 2>/dev/null)" && break || true
   fi
+done
+if [[ -z "${SIDECHAT_DIR:-}" ]]; then
+  echo "sidechat-monitor: no .sidechat/config found in \$PWD or \$HOME; set SIDECHAT_DIR env to override" >&2
+  exit 0
 fi
 
 CONFIG="$SIDECHAT_DIR/config"

@@ -4,13 +4,25 @@ from other users.
 
 ## Instructions
 
-0. **First**, self-heal if the server has rolled a new version (covers both webhook-injected and cron-polled invocations — the FileChanged hook is best-effort, this guarantees it). Run this Bash one-liner; it's a no-op when versions match:
+0. **Resolve SIDECHAT_DIR.** Claude Code may be launched from any CWD (especially
+   when woken by a plugin monitor, not a shell script). Inline resolver — avoid
+   depending on a helper script being on disk yet (bootstrap-safe for bots that
+   haven't auto-updated past 2.6.6):
    ```bash
-   bash -c 'L=$(cat .sidechat/sc-version.txt 2>/dev/null); R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL .sidechat/config | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n"); [ -n "$L" ] && [ -n "$R" ] && [ "$L" != "$R" ] && bash .sidechat/sc-update.sh >/dev/null 2>&1 || true'
+   for d in "${SIDECHAT_DIR:-}" "$PWD/.sidechat" "$HOME/.sidechat"; do
+     [ -n "$d" ] && [ -f "$d/config" ] && { export SIDECHAT_DIR="$d"; break; }
+   done
+   [ -z "${SIDECHAT_DIR:-}" ] && { echo "No sidechat config found; skipping /mention-check"; exit 0; }
    ```
-   Then mark the new mentions as `engaged` so other users see Claude has opened them: run `.sidechat/sc-receipt.sh engaged` (one Bash call, no output expected).
-1. Read `.sidechat/new-mentions.txt`. If it doesn't exist or is empty, say "No new mentions" and stop.
-2. Read BOT_NAME from `.sidechat/config`.
+   From here on, always use `$SIDECHAT_DIR/...` for sidechat files — never bare `.sidechat/...`. Each subsequent Bash tool call should include `SIDECHAT_DIR=<resolved-value>` inline (Claude Code spawns a fresh shell per call, so exports don't persist across tool invocations).
+
+0a. **Self-heal if the server has rolled a new version** (covers both webhook-injected and cron-polled invocations — the FileChanged hook is best-effort, this guarantees it). Run this Bash one-liner; it's a no-op when versions match:
+   ```bash
+   bash -c 'L=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null); R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL "$SIDECHAT_DIR/config" | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n"); [ -n "$L" ] && [ -n "$R" ] && [ "$L" != "$R" ] && bash "$SIDECHAT_DIR/sc-update.sh" >/dev/null 2>&1 || true'
+   ```
+   Then mark the new mentions as `engaged` so other users see Claude has opened them: run `"$SIDECHAT_DIR/sc-receipt.sh" engaged` (one Bash call, no output expected).
+1. Read `$SIDECHAT_DIR/new-mentions.txt`. If it doesn't exist or is empty, say "No new mentions" and stop.
+2. Read BOT_NAME from `$SIDECHAT_DIR/config`.
 3. For each line (format: `[YYYY-MM-DD HH:MM:SS] sender: content`), classify and handle:
 
 ### Read-only response — prefer MCP tool, fall back to file
@@ -20,8 +32,8 @@ from other users.
 - Thanks/acknowledgments → skip, no reply needed
 
 **How to reply (in preference order):**
-1. **If `mcp__sidechat__post_reply` is available** (MCP registered + tool visible), call it with `mention_id` from `.sidechat/new-mention-ids.txt` and the reply text. One call — it posts threaded AND marks the mention read server-side. No receipt.sh / reply-to.txt sidecar needed.
-2. **Fallback** (no MCP tools): write the parent id to `.sidechat/reply-to.txt` **first**, then Write to `.sidechat/message.txt`. Hook order matters — sidecar must exist before the write fires the post-message hook.
+1. **If `mcp__sidechat__post_reply` is available** (MCP registered + tool visible), call it with `mention_id` from `$SIDECHAT_DIR/new-mention-ids.txt` and the reply text. One call — it posts threaded AND marks the mention read server-side. No receipt.sh / reply-to.txt sidecar needed.
+2. **Fallback** (no MCP tools): write the parent id to `$SIDECHAT_DIR/reply-to.txt` **first**, then Write to `$SIDECHAT_DIR/message.txt`. Hook order matters — sidecar must exist before the write fires the post-message hook.
 
 Format: `@sender Your response here`
 
@@ -30,8 +42,8 @@ Format: `@sender Your response here`
 - Anything that would modify the repo, infrastructure, or external state
 
 For proposals:
-1. Reply via `.sidechat/message.txt`: `@sender Understood — drafting a proposal for review.`
-2. Append to `.sidechat/pending-actions.txt`:
+1. Reply via `$SIDECHAT_DIR/message.txt`: `@sender Understood — drafting a proposal for review.`
+2. Append to `$SIDECHAT_DIR/pending-actions.txt`:
 ```
 === PROPOSAL [YYYY-MM-DD HH:MM:SS] ===
 FROM: sender
@@ -47,8 +59,8 @@ STATUS: pending
 
 ## After processing
 
-4. Delete `.sidechat/new-mentions.txt` so the watcher can write fresh next time.
-5. Mark the mentions as `read` so other users see Claude has finished: run `.sidechat/sc-receipt.sh read` (this also clears `.sidechat/new-mention-ids.txt`).
+4. Delete `$SIDECHAT_DIR/new-mentions.txt` so the watcher can write fresh next time.
+5. Mark the mentions as `read` so other users see Claude has finished: run `"$SIDECHAT_DIR/sc-receipt.sh" read` (this also clears `$SIDECHAT_DIR/new-mention-ids.txt`).
 6. Briefly summarize what you handled.
 
 ## Important
