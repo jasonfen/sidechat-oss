@@ -22,6 +22,7 @@ COPY --chown=bun:bun --from=deps /app/node_modules ./node_modules
 COPY --chown=bun:bun package.json server.ts ./
 COPY --chown=bun:bun static ./static
 COPY --chown=bun:bun install ./install
+COPY --chown=bun:bun .claude-plugin ./.claude-plugin
 COPY --chown=bun:bun docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
