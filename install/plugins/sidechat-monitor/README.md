@@ -114,10 +114,12 @@ README.
 - **CLAUDE_PLUGIN_ROOT resolution.** Relies on CC setting the env var
   before invoking the monitor command. Tested working on 2.1.116 +
   2.1.117; verify on future CC releases.
-- **Dedup is per-process.** The SEEN_FILE lives for the plugin's
-  lifetime; restarts reset it. This is intentional — a fresh start
-  should treat its first poll as fresh — but means restarts briefly
-  emit re-wakes until pending-mentions is caught up.
+- **Dedup via the on-disk ids file.** The script checks
+  `new-mention-ids.txt` directly before writing — no plugin-private
+  SEEN_FILE. This means (a) webhook+plugin races are handled (whoever
+  writes first wins, the other skips), (b) restarts don't re-emit
+  in-flight mentions, (c) `sc-receipt.sh read` deleting the ids file
+  is a natural reset signal for the next poll's baseline.
 
 ## References
 

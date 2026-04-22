@@ -48,35 +48,46 @@ source "$CONFIG"
 POLL_INTERVAL="${SIDECHAT_POLL_INTERVAL_SEC:-5}"
 POLL_LOOKBACK_HOURS="${SIDECHAT_POLL_HOURS:-72}"
 
-# Dedup: track emitted ids in a lifetime tmpfile so the same mention
-# isn't signaled on every poll (fenbot caught this in the 2026-04-21
-# probe run — without dedup, a single pending mention fires a wake
-# every POLL_INTERVAL seconds forever).
-SEEN_FILE="$(mktemp -t sidechat-monitor-seen.XXXXXX)"
-trap 'rm -f "$SEEN_FILE"' EXIT
-
 MENTIONS_FILE="$SIDECHAT_DIR/new-mentions.txt"
 IDS_FILE="$SIDECHAT_DIR/new-mention-ids.txt"
+
+# Dedup strategy: the on-disk new-mention-ids.txt file IS the state.
+# Checking against it directly (instead of a plugin-private tmpfile)
+# handles three cases a SEEN_FILE approach gets wrong:
+#
+#   1. Webhook and plugin race on the same mention. If webhook POST
+#      arrives between plugin polls, webhook writes the id first;
+#      plugin's next poll sees it already present, skips. No double
+#      /mention-check fire.
+#   2. Plugin restart. A SEEN_FILE in mktemp resets every start,
+#      which would re-emit pending mentions still in the file. Using
+#      the file itself means restart sees existing state.
+#   3. /mention-check clearing the ids file. sc-receipt.sh read
+#      deletes new-mention-ids.txt after posting read receipts
+#      server-side; pending-mentions then excludes those ids, so the
+#      next poll naturally treats the (now empty) file as the
+#      baseline. No stale-state leaks.
+#
+# Thanks to fenbot for flagging the race-window shape before UAT.
 
 while true; do
   body=$(curl -sf -H "Authorization: Bearer $TOKEN" \
     "$SERVER_URL/messages/pending-mentions?since_hours=${POLL_LOOKBACK_HOURS}" \
     2>/dev/null || echo '{}')
 
-  # Extract new mentions (id + formatted line), dedup against SEEN_FILE.
-  # Format lines the same way the webhook listener does so /mention-check
-  # reads them without adapter code.
+  # Extract new mentions (id + formatted line), dedup against the
+  # on-disk IDS_FILE. Format lines the same way the webhook listener
+  # does so /mention-check reads them without adapter code.
   new_ids=()
   new_lines=()
   while IFS=$'\t' read -r id ts sender content; do
     [[ -z "$id" ]] && continue
-    if ! grep -qxF "$id" "$SEEN_FILE" 2>/dev/null; then
+    if ! grep -qxF "$id" "$IDS_FILE" 2>/dev/null; then
       new_ids+=("$id")
       # Timestamp formatting matches sc-webhook-server.py + sessionstart-poll.sh
       # ("[YYYY-MM-DD HH:MM:SS] sender: content") so /mention-check parses it.
       pretty_ts="$(echo "$ts" | sed -e 's/T/ /' -e 's/\..*Z$//' -e 's/Z$//')"
       new_lines+=("[$pretty_ts] $sender: $content")
-      echo "$id" >> "$SEEN_FILE"
     fi
   done < <(echo "$body" | jq -r '(.messages // [])[] | [.id, .timestamp, .sender, .content] | @tsv' 2>/dev/null)
 
