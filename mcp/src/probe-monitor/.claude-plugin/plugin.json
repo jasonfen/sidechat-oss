@@ -1,0 +1,6 @@
+{
+  "name": "sidechat-monitor-probe",
+  "version": "0.0.1",
+  "description": "Wake-from-idle probe for CC plugin background monitors. See README.md.",
+  "monitors": "./monitors/monitors.json"
+}

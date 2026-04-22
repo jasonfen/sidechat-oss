@@ -1,0 +1,7 @@
+[
+  {
+    "name": "probe-tick",
+    "command": "seq=0; while true; do seq=$((seq+1)); echo \"PROBE_TICK $(date -Iseconds) seq=$seq\"; sleep 10; done",
+    "description": "Synthetic 10s ticker — isolates whether ANY monitor stdout wakes an idle REPL"
+  }
+]

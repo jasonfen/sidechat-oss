@@ -1,0 +1,7 @@
+[
+  {
+    "name": "probe-mentions",
+    "command": "${CLAUDE_PLUGIN_ROOT}/scripts/poll-mentions.sh",
+    "description": "Sidechat pending-mentions poller — exercises the realistic pattern"
+  }
+]

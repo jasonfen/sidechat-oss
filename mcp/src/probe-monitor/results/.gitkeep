@@ -1,0 +1,2 @@
+# Probe run logs land here. Captured via `tmux capture-pane -p -t probe-X -S -2000 > probe-X-YYYYMMDD-HHMMSS.log`.
+# See ../README.md for the results-table convention and regression re-run cadence.
