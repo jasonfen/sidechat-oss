@@ -52,6 +52,23 @@ POLL_LOOKBACK_HOURS="${SIDECHAT_POLL_HOURS:-72}"
 
 MENTIONS_FILE="$SIDECHAT_DIR/new-mentions.txt"
 IDS_FILE="$SIDECHAT_DIR/new-mention-ids.txt"
+FILES_DIR="$SIDECHAT_DIR/files"
+mkdir -p "$FILES_DIR"
+
+# Download one attachment to FILES_DIR using the same naming scheme as
+# sc-webhook-server.py (`${file_id}_${basename}`), so /mention-check and
+# the webhook path produce identical on-disk layouts. Prints the local
+# path on success, nothing on failure (caller skips the [file] line).
+download_attachment() {
+  local fid="$1" fname="$2"
+  local safe_name="${fname##*/}"       # basename
+  safe_name="${safe_name//../_}"        # defang traversal
+  local local_path="$FILES_DIR/${fid}_${safe_name}"
+  if curl -sf --max-time 30 -H "Authorization: Bearer $TOKEN" \
+       -o "$local_path" "$SERVER_URL/files/${fid}/download"; then
+    printf '%s' "$local_path"
+  fi
+}
 
 # Dedup strategy: the on-disk new-mention-ids.txt file IS the state.
 # Checking against it directly (instead of a plugin-private tmpfile)
@@ -82,16 +99,33 @@ while true; do
   # does so /mention-check reads them without adapter code.
   new_ids=()
   new_lines=()
-  while IFS=$'\t' read -r id ts sender content; do
+  # files[] is shipped as compact JSON in a 5th tsv column so the bash
+  # loop can iterate attachments per message without a second jq pass.
+  # Matches the webhook listener's behavior (sc-webhook-server.py:114-126)
+  # — download each attachment, append `  [file] name -> local` under the
+  # message line. Closes the payload-parity gap for "@bot review this file"
+  # mentions where the webhook path surfaced attachments but the plugin
+  # poll path silently dropped them.
+  while IFS=$'\t' read -r id ts sender content files_json; do
     [[ -z "$id" ]] && continue
     if ! grep -qxF "$id" "$IDS_FILE" 2>/dev/null; then
       new_ids+=("$id")
       # Timestamp formatting matches sc-webhook-server.py + sessionstart-poll.sh
       # ("[YYYY-MM-DD HH:MM:SS] sender: content") so /mention-check parses it.
       pretty_ts="$(echo "$ts" | sed -e 's/T/ /' -e 's/\..*Z$//' -e 's/Z$//')"
-      new_lines+=("[$pretty_ts] $sender: $content")
+      line="[$pretty_ts] $sender: $content"
+      if [[ -n "$files_json" && "$files_json" != "null" && "$files_json" != "[]" ]]; then
+        while IFS=$'\t' read -r fid fname; do
+          [[ -z "$fid" ]] && continue
+          local_path="$(download_attachment "$fid" "$fname")"
+          if [[ -n "$local_path" ]]; then
+            line+=$'\n'"  [file] $fname -> $local_path"
+          fi
+        done < <(echo "$files_json" | jq -r '.[] | [.id, .filename] | @tsv' 2>/dev/null)
+      fi
+      new_lines+=("$line")
     fi
-  done < <(echo "$body" | jq -r '(.messages // [])[] | [.id, .timestamp, .sender, .content] | @tsv' 2>/dev/null)
+  done < <(echo "$body" | jq -r '(.messages // [])[] | [.id, .timestamp, .sender, .content, ((.files // []) | @json)] | @tsv' 2>/dev/null)
 
   if (( ${#new_ids[@]} > 0 )); then
     # Append to the existing new-mentions files so /mention-check picks
