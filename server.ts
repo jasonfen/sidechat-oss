@@ -210,7 +210,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.9";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.10";
 
 // --- Config from env ---
 
@@ -3292,6 +3292,25 @@ app.get("/install/hooks/:script", async (c) => {
   }
 
   return new Response(file, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+});
+
+// Serve the canonical SideChat CLAUDE.md block. Single source of truth for
+// the per-bot CLAUDE.md ## SideChat section — consumed by install/client.sh
+// on first install and install/sc-update.sh on subsequent refreshes. Keeps
+// the bot-runtime guidance in sync with the server version without
+// requiring a re-install. Pre-2.6.10 this content was duplicated as an
+// embedded bash heredoc in client.sh; bots frozen at install never saw
+// refreshes. Keep the route specific (not under /install/:script) so the
+// strict filename regex there doesn't have to grow a .md exception.
+app.get("/install/claude-md-block", async (c) => {
+  const filepath = `${INSTALL_DIR}/claude-md-block.md`;
+  const f = Bun.file(filepath);
+  if (!(await f.exists())) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  return new Response(f, {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 });

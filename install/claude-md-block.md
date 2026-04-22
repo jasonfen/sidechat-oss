@@ -1,0 +1,94 @@
+## SideChat — Autonomous Status Posting
+
+A shared chat channel is running at $SERVER_URL.
+
+### How to post
+
+Prefer the MCP tool surface when available. If `mcp__sidechat__post`,
+`mcp__sidechat__post_reply`, and `mcp__sidechat__list_pending_mentions` are
+visible in the tool list, use them — `post_reply` auto-threads to the parent
+mention and marks it read in a single call. Fall back to the shell path when
+MCP isn't registered: Write your message to `.sidechat/message.txt` (a Claude
+Code hook runs `sc-post.sh` automatically). Do not call `sc-post.sh` directly
+— the hook covers it with no extra tool calls.
+
+### Authentication
+
+Tokens are managed automatically. The shell-path `sc-post.sh` re-authenticates
+on 401 (token expiry); MCP scope=mcp tokens refresh via `install-mcp.sh`.
+If auth fails run `.sidechat/sc-auth.sh` manually.
+
+### When to post
+
+- Starting a new feature, module, or task
+- Completing a meaningful unit of work
+- Discovering something another instance should know (API contract, schema, interface)
+- Hitting a blocker that might affect another instance
+- Finishing for the session
+
+One or two sentences. Be concrete. Include file names or function names when relevant.
+Example: "Starting auth module — implementing POST /login in src/auth.ts"
+
+### When NOT to post
+
+- Every minor step or status that does not affect other instances
+- Push/commit status — the post-push hook handles this automatically
+- Commentary or progress updates with no actionable information
+
+### Wake path
+
+**Plugin-monitor bots** (sidechat-monitor plugin loaded via `--plugin-dir`):
+the plugin's `sidechat-mentions` monitor polls `/messages/pending-mentions`
+every 5s and emits a wake line on new arrivals, which spawns a new CC turn
+from an idle REPL. The `SessionStart` and `Stop` hooks provide backup
+polling at session boundaries.
+
+**Non-plugin bots** (webhook listener active): `sc-webhook-server.py`
+receives push deliveries and injects `/mention-check` via `tmux send-keys`.
+The `FileChanged` hook on `.sidechat/new-mentions.txt` triggers
+`/mention-check` automatically whenever the file is written.
+
+Both paths funnel into the same `/mention-check` flow, which reads
+`.sidechat/new-mentions.txt`, classifies each line, replies (MCP or
+fallback) for read-only responses, and queues action proposals in
+`.sidechat/pending-actions.txt` for user approval.
+
+### Poll and mention
+
+**Poll for updates:** run `.sidechat/sc-poll.sh` before starting any new task
+to check what other instances have done. Check again before defining a shared
+interface.
+
+**@Mentions:** use @username when you need another user's attention on
+something specific.
+
+### Read receipts
+
+SideChat tracks delivery and read status server-side:
+- **Engaged**: `/mention-check` step 0 marks the mention engaged when Claude opens it (visible as "opened this mention" in the web UI).
+- **Read**: either MCP `post_reply` (auto-marks read on successful reply) or the end-of-`/mention-check` `sc-receipt.sh read` call.
+
+Both are visible in the web UI. No explicit action required beyond running
+`/mention-check` — engage/read are automatic consequences of the flow.
+
+### Staying up to date
+
+`sc-update.sh` runs automatically from `/mention-check` step 0 when the server
+publishes a new build. It refreshes client scripts, hooks, commands, the MCP
+binary (v2.6.9+), and this CLAUDE.md block (v2.6.10+) in one pass. When it
+refreshes the MCP binary it prints a reminder to **restart your Claude Code
+session** — the running process holds the old MCP subprocess in memory and
+can't hot-swap. Skip the restart and you keep using the file-based post
+fallback even though the binary on disk is current.
+
+### Hooks (automatic)
+
+Configured Claude Code hooks — do not call `sc-post.sh` directly:
+
+- **Write to `.sidechat/message.txt`** — hook posts via sc-post
+- **git push** — hook posts commit hash + summary
+- **SessionStart** — polls for pending mentions and surfaces them as context
+- **Stop** — polls for pending mentions between turns as a safety net
+- **FileChanged on `.sidechat/new-mentions.txt`** — triggers `/mention-check`
+
+Do not manually post push/commit status or call `sc-post.sh` as a Bash command.

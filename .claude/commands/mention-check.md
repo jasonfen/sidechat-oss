@@ -20,8 +20,21 @@ from other users.
    # treated as "outdated" — triggers first-boot auto-update rather than the
    # silent no-op that kept canary pinned pre-2.6.7 (fenbot 2026-04-22).
    L=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null)
-   R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL "$SIDECHAT_DIR/config" | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n")
+   SU=$(grep ^SERVER_URL "$SIDECHAT_DIR/config" | cut -d= -f2)
+   R=$(curl -fsS --max-time 3 "$SU/install/version" 2>/dev/null | tr -d "\r\n")
    [ -n "$R" ] && [ "$L" != "$R" ] && bash "$SIDECHAT_DIR/sc-update.sh" >/dev/null 2>&1 || true
+   # Belt-and-suspenders MCP drift probe — catches the case where sc-version
+   # matches but ~/.claude.json points at a stale sidechat-mcp binary
+   # (manual nuke of ~/.sidechat/mcp/, or first-install bootstrap). Sc-update
+   # itself handles drift when it runs; this is the fallback when it doesn't.
+   if command -v jq >/dev/null 2>&1 && [ -f "$HOME/.claude.json" ]; then
+     MC=$(jq -r '.mcpServers.sidechat.command // empty' "$HOME/.claude.json" 2>/dev/null)
+     if [ -n "$MC" ]; then
+       MV=$(basename "$MC" | sed -n 's/.*-v\([0-9][0-9.]*\)$/\1/p')
+       EV=$(curl -fsS --max-time 3 "$SU/install/mcp-version" 2>/dev/null | jq -r '.expected_client_build_sha // empty' 2>/dev/null)
+       [ -n "$EV" ] && [ "$MV" != "$EV" ] && bash "$SIDECHAT_DIR/install-mcp.sh" --apply >/dev/null 2>&1 || true
+     fi
+   fi
    # Mark engaged — visible to other users as "Claude opened this mention"
    "$SIDECHAT_DIR/sc-receipt.sh" engaged
    ```

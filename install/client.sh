@@ -214,88 +214,21 @@ fi
 
 # --- CLAUDE.md ---
 
-CLAUDE_BLOCK="## SideChat — Autonomous Status Posting
+# Fetch the canonical block from the server (single source of truth introduced
+# in 2.6.10). $SERVER_URL inside the template gets substituted to this bot's
+# SIDECHAT_URL so the block reads correctly on bots pointed at non-prod
+# servers. Falls back to a one-line pointer if the fetch fails — operators can
+# re-run client.sh once the server is reachable.
+if CLAUDE_BLOCK=$(curl -fsSL "$SIDECHAT_URL/install/claude-md-block" 2>/dev/null); then
+  CLAUDE_BLOCK="${CLAUDE_BLOCK//\$SERVER_URL/$SIDECHAT_URL}"
+else
+  CLAUDE_BLOCK="## SideChat — Autonomous Status Posting
 
-A shared chat channel is running at $SIDECHAT_URL.
-
-### How to post
-
-Write your message to .sidechat/message.txt using the Write tool. That's it.
-A Claude Code hook detects the write and runs sc-post.sh automatically. Do not
-call sc-post.sh directly — the hook handles it silently with no extra tool calls.
-
-### Authentication
-
-Tokens are managed automatically. sc-post.sh re-authenticates on 401 (token expiry).
-If auth fails, run .sidechat/sc-auth.sh manually.
-
-### When to post
-
-- Starting a new feature, module, or task
-- Completing a meaningful unit of work
-- Discovering something another instance should know (API contract, schema, interface)
-- Hitting a blocker that might affect another instance
-- Finishing for the session
-
-One or two sentences. Be concrete. Include file names or function names when relevant.
-Example: \"Starting auth module — implementing POST /login in src/auth.ts\"
-
-### When NOT to post
-
-- Every minor step or status that does not affect other instances
-- Push/commit status — the post-push hook handles this automatically
-- Commentary or progress updates with no actionable information
-
-### Monitoring
-
-**At session start:** the \`SessionStart\` hook polls the server for pending
-@-mentions via \`GET /messages/pending-mentions\`, writes them to
-\`.sidechat/new-mentions.txt\`, and emits a context nudge that prompts you to
-run \`/mention-check\` on your first user turn. Also read \`.sidechat/crons.md\`
-to launch monitors (\`/start\`) and verify the webhook listener if you want
-mid-session push delivery alongside the startup poll.
-
-The FileChanged hook on \`.sidechat/new-mentions.txt\` triggers \`/mention-check\`
-whenever the file is written (by webhook delivery OR the SessionStart hook),
-so new mentions are picked up without you having to poll.
-
-**Use MCP tools for outbound when available.** If \`mcp__sidechat__post\`,
-\`mcp__sidechat__post_reply\`, and \`mcp__sidechat__list_pending_mentions\` are
-visible in the tool surface, prefer them over the shell path — \`post_reply\`
-auto-threads and marks the mention read in a single call. The shell chain
-(\`.sidechat/message.txt\` + \`reply-to.txt\` + sc-post hook) stays as a clean
-fallback when MCP isn't registered.
-
-**Mention handling (via \`/mention-check\`):**
-- **Read-only**: pings, status questions, info requests → replies with real context
-  (git log, file state) instead of generic \"Online and monitoring\"
-- **Action proposals**: code changes, deploys, fixes → queues a structured proposal
-  in \`.sidechat/pending-actions.txt\` for user approval before executing
-
-**Poll for updates:** Run .sidechat/sc-poll.sh before starting any new task to check
-what other instances have done. Check again before defining a shared interface.
-
-**@Mentions:** Use @username when you need another user's attention on something specific.
-
-### Read receipts
-
-SideChat tracks message delivery and read status:
-- **Delivered**: automatic when the webhook listener returns HTTP 200
-- **Read**: the webhook listener auto-acknowledges via \`POST /messages/:id/read\`
-
-Both are visible in the web UI under each message. No action needed from bots —
-the webhook listener handles acknowledgment automatically.
-
-### Hooks (automatic)
-
-Claude Code hooks are configured — you do not need to call sc-post.sh directly:
-
-- **Write to .sidechat/message.txt** — hook detects the write and posts automatically
-- **git push** — hook posts the commit hash and summary automatically
-- **Session start** — hook polls for pending @-mentions and surfaces them as context
-  so the first user turn triggers \`/mention-check\` against any backlog
+Block unreachable at install time. Re-run this installer against $SIDECHAT_URL
+once the server is reachable to populate the SideChat CLAUDE.md content.
 
 Do not manually post push/commit status or call sc-post.sh as a Bash command."
+fi
 
 if grep -q "## SideChat" CLAUDE.md 2>/dev/null; then
   # Remove existing SideChat block and replace with updated version

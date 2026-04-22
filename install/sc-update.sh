@@ -146,6 +146,34 @@ for cmd in start.md mention-check.md; do
   fi
 done
 
+# Refresh the ## SideChat block inside the bot's CLAUDE.md. Pre-2.6.10 this
+# only happened at client.sh install time; existing bots stayed frozen at
+# whatever block shipped with their initial install. Now /install/claude-md-block
+# is the single source of truth and sc-update keeps the local copy in sync.
+# Strip regex and append order match client.sh so legacy blocks get cleanly
+# replaced; foreign CLAUDE.md content (non-SideChat) stays untouched.
+CLAUDE_MD="$(dirname "$SCRIPT_DIR")/CLAUDE.md"
+if CLAUDE_BLOCK=$(curl -fsSL "$SERVER_URL/install/claude-md-block" 2>/dev/null); then
+  CLAUDE_BLOCK="${CLAUDE_BLOCK//\$SERVER_URL/$SERVER_URL}"
+  # Only rewrite if the block actually differs — keeps noise out of the
+  # sc-update output on steady state.
+  NEW_HASH=$(printf '%s' "$CLAUDE_BLOCK" | sha256sum | awk '{print $1}')
+  CURRENT_BLOCK=""
+  if [[ -f "$CLAUDE_MD" ]] && grep -q "^## SideChat" "$CLAUDE_MD"; then
+    CURRENT_BLOCK=$(awk '/^## SideChat/,/^Do not manually post/' "$CLAUDE_MD")
+  fi
+  CURRENT_HASH=$(printf '%s' "$CURRENT_BLOCK" | sha256sum | awk '{print $1}')
+  if [[ "$NEW_HASH" != "$CURRENT_HASH" ]]; then
+    echo "Refreshing CLAUDE.md SideChat block..."
+    if [[ -f "$CLAUDE_MD" ]] && grep -q "^## SideChat" "$CLAUDE_MD"; then
+      sed '/^## SideChat/,/^Do not manually post/d' "$CLAUDE_MD" > "$CLAUDE_MD.tmp" && mv "$CLAUDE_MD.tmp" "$CLAUDE_MD"
+      sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$CLAUDE_MD" > "$CLAUDE_MD.tmp" && mv "$CLAUDE_MD.tmp" "$CLAUDE_MD"
+    fi
+    printf '\n%s\n' "$CLAUDE_BLOCK" >> "$CLAUDE_MD"
+    echo "  CLAUDE.md SideChat block updated"
+  fi
+fi
+
 # Record the server's current build SHA for client-version tracking
 if SERVER_VER=$(curl -fsSL "$SERVER_URL/install/version" 2>/dev/null); then
   echo "${SERVER_VER}" | tr -d '\r\n' > "$SCRIPT_DIR/sc-version.txt"
