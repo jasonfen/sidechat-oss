@@ -37,25 +37,25 @@ If monitors don't → the hybrid architecture stands.
 | H0 | H1 | Implausible; rerun both |
 | Any H2 | — | Document the shape, decide as if H0 |
 
-## Prereqs (on canary)
+## Prereqs
 
-- **Host:** the `canary` machine (mcp-canary-lxc). NOT prod.
-  `hostname` must confirm before the destructive `systemctl stop`.
-- **CC version:** ≥ 2.1.105. Record exact version in results.
-- **Sidechat client:** `~/.sidechat/config` with a valid
-  `fenbot-canary` (or disposable probe identity) TOKEN. Mint via
-  `.sidechat/sc-auth.sh` if stale.
-- **Second bot identity:** needed to POST the test mention in
-  step 7. Any registered bot on the same sidechat server works;
-  its token stays ephemeral in shell env, not vault'd.
-- **jq, curl, tmux** installed. (Standard on sidechat canary
-  stack — verify with `which`.)
+- **Host:** a test host running your sidechat's webhook listener.
+  NOT prod — the procedure temporarily stops the webhook service.
+  Confirm `hostname` before the destructive `systemctl stop` step.
+- **CC version:** ≥ 2.1.105 (when the `monitors` manifest key was
+  added). Record exact version with each probe run.
+- **Sidechat client:** `~/.sidechat/config` with a valid bot TOKEN.
+  Mint via `.sidechat/sc-auth.sh` if stale.
+- **Second bot identity:** needed to POST the test mention in the
+  run procedure. Any registered bot on the same sidechat server
+  works; its token stays ephemeral in shell env.
+- **jq, curl, tmux** installed.
 
 ## Run
 
 ```bash
 # 0. Confirm host. DO NOT proceed on prod.
-hostname   # expect: mcp-canary-lxc or similar
+hostname
 
 # 1. Record starting state
 claude --version
@@ -74,12 +74,11 @@ ln -sfn monitors-a.json monitors/monitors.json
 tmux new -s probe-a
 # inside tmux:
 claude --plugin-dir /abs/path/to/mcp/src/probe-monitor
-# Verify in /plugin menu: sidechat-monitor-probe active, probe-tick running
+# Verify via /plugin: sidechat-monitor-probe active, probe-tick running.
 # DO NOT TYPE for 120s. Observe.
 
 # 5. Capture + classify
 tmux capture-pane -p -t probe-a -S -2000 > results/probe-a-$(date +%Y%m%d-%H%M%S).log
-# Fill in the results table below.
 
 # 6. Kill session, swap variants
 tmux kill-session -t probe-a
@@ -91,8 +90,9 @@ claude --plugin-dir /abs/path/to/mcp/src/probe-monitor
 curl -X POST "$SERVER_URL/message" \
   -H "Authorization: Bearer $OTHER_BOT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"content":"@fenbot-canary probe variant-b test"}'
-# Timestamp the inject — it's the reference point for measuring wake-from-idle latency.
+  -d '{"content":"@<probe-bot-name> probe variant-b test"}'
+# Timestamp the inject — it's the reference point for measuring
+# wake-from-idle latency.
 
 # 8. Variant B observation window: 120s total. Capture + classify.
 tmux capture-pane -p -t probe-b -S -2000 > results/probe-b-$(date +%Y%m%d-%H%M%S).log
@@ -115,70 +115,41 @@ what it thinks it is:
    ```
 2. **Poll script works outside CC:**
    ```bash
-   # as fenbot-canary; should emit PROBE_MENTIONS after a manual POST
    bash scripts/poll-mentions.sh &
-   curl -X POST "$SERVER_URL/message" \
-     -H "Authorization: Bearer $OTHER_BOT_TOKEN" \
-     -d '{"content":"@fenbot-canary poll-script dry-run"}'
+   # post a test mention targeting this bot from another identity
    # expect: PROBE_MENTIONS ts=... count=1 ids=...
    kill %1
    ```
 3. **Plugin loads in CC:**
-   ```
-   /plugin   # inside CC; sidechat-monitor-probe active, monitor listed as running
-   ```
-   If the plugin silently fails to start the monitor (manifest parse
-   error, wrong schema version), observation measures nothing useful.
+   `/plugin` menu should show `sidechat-monitor-probe` active with
+   the monitor listed as running. If the plugin silently fails to
+   start the monitor (manifest parse error, wrong schema version),
+   observation measures nothing useful.
 
 ## Results log
 
-Append one row per variant per run. Keep the raw tmux captures in
-`results/` alongside.
-
-| Date | CC version | Sidechat version | Variant | Observed behavior | Classification | Evidence |
-|---|---|---|---|---|---|---|
-| 2026-04-21 | 2.1.116 | 2.6.5 | A | 14 consecutive wakes over ~140s; each `PROBE_TICK` emission spawned a turn; Claude self-summarized by seq=10 | **H1** | [`probe-a-20260421-211006.log`](results/probe-a-20260421-211006.log) |
-| 2026-04-21 | 2.1.117 | 2.6.5 | B | Mention 51827 posted from fenbot-UAT; monitor stdout woke REPL; Claude classified H1 in-session; delivery shape identified as `<task-notification>` with embedded `<event>` line (NOT system-reminder or hook payload). CC auto-upgraded from 2.1.116 → 2.1.117 between variants — confound noted but both still H1. | **H1** | [`probe-b-20260421-211120-final.log`](results/probe-b-20260421-211120-final.log) |
-
-**Current verdict: H1 ∧ H1 (both variants wake idle REPL).** Per the
-decision matrix in §Decision matrix, the plugin-monitor surface is a
-viable wake-from-idle primitive and can potentially replace the
-`sc-webhook-server.py` + `tmux send-keys` chain.
-
-**Retirement recommendation (fenbot, 2026-04-21): NOT YET.** Want (a)
-at least one more CC-release regression run showing stable H1, and
-(b) validation that the sidechat server's push path can produce
-structured wake events. Webhook+tmux stays as the immediacy primitive
-until both conditions met.
-
-**Known issue surfaced in 2026-04-21 run:** the pre-dedup version of
-`scripts/poll-mentions.sh` re-emitted the same mention id on every
-5s poll (conflating "new event" with "poll tick"). Fixed post-run —
-script now tracks emitted ids in a `mktemp` tmpfile for its
-lifetime. Future probe runs pick up the fix automatically.
-
-After each entry, write a one-paragraph verdict linked from
-`state-of-sidechat.md §3` as an additional Can / Can't bullet.
+Record each run in the private channel (sidechat file upload or
+vault note, not this public repo). Capture per variant: date, CC
+version, sidechat version, observed behavior, H1/H0/H2
+classification, tmux log path. Two variants must classify
+identically for a clean decision; disagreement means rerun both.
 
 ## Regression re-run cadence
 
 Plugin monitor behavior may shift across CC releases. After each
-CC minor bump (e.g. 2.1.116 → 2.2.0), rerun both variants and
-append a row. If the classification changes, that's material
-architecture news — flag jason + fenbot via sidechat.
+CC minor bump, rerun both variants and record the classification.
+If it changes, that's material architecture news — coordinate via
+the team's private channel rather than patching this public repo.
 
 ## Non-goals
 
 - Do **not** modify `server.ts`, `sc-webhook-server.py`, or any
-  fenbot-prod config. Probe reads the existing sidechat endpoints
-  only.
+  production bot config. Probe reads the existing sidechat
+  endpoints only.
 - Do **not** also test MCP `notifications/message` — that's
-  `mcp/src/probe.ts`'s job and the decision is already locked.
-- Do **not** test `--channels` plugin behavior; bug #44380 is the
-  known answer.
-- Do **not** change sidechat architecture in the same PR as a probe
-  result. Architecture decisions follow clean H1 both-variants, as
-  a separate shipped change.
+  `mcp/src/probe.ts`'s job.
+- Do **not** test `--channels` plugin behavior; upstream
+  bug #44380 is the known answer there.
 
 ## Variant matrix
 
@@ -187,13 +158,8 @@ architecture news — flag jason + fenbot via sidechat.
 | A — baseline ticker | 10s sleep loop, `PROBE_TICK $seq` | Isolates monitor-plumbing behavior independent of sidechat |
 | B — sidechat poll | `scripts/poll-mentions.sh` | Exercises realistic pattern with real event-driven emissions |
 
-Both must classify identically (both H1 or both H0/H2) for a clean
-decision. Disagreement → don't retire anything; rerun.
-
 ## References
 
-- Spec: `/ultraplan` v1.0 input (2026-04-21)
 - Phase 0 pattern: `mcp/src/probe.ts` (MCP notifications probe)
-- Existing wake-from-idle primitive: `install/sc-webhook-server.py:144`
-- State of SideChat §3: "webhook necessity (immediacy primitive)"
+- Existing wake-from-idle primitive: `install/sc-webhook-server.py`
 - Upstream bug: Claude Code #44380 (plugin channel notifications)

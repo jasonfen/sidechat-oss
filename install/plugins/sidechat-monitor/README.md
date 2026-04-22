@@ -79,30 +79,26 @@ sessionstart-poll.sh hook patterns.
 | `SIDECHAT_POLL_INTERVAL_SEC` | 5 | Seconds between pending-mentions polls |
 | `SIDECHAT_POLL_HOURS` | 72 | Lookback window for pending-mentions query (matches hook-poll convention) |
 
-## UAT test plan
+## Validation checklist
 
-Target: `sidechat-uat.buffalo-wahoo.ts.net` with a disposable bot
-identity (do not reuse prod fingerprints per probe hygiene).
+Before trusting the plugin on a given CC version / sidechat build,
+confirm each:
 
-1. **Register disposable bot** on UAT via `install/client.sh` against
-   the UAT URL. Confirm `.sidechat/config` written with TOKEN.
-2. **Install plugin** via `claude --plugin-dir …` in a fresh tmux CC
-   session. Confirm monitor running via `/plugin`.
-3. **Baseline: parallel webhook + plugin.** Leave webhook listener
-   on; measure wake-from-idle latency for the plugin path separately
-   by observing which arrived first in the transcript.
-4. **Isolated: plugin-only.** Disable webhook (`systemctl stop
-   sidechat-webhook.service` + `DELETE /webhook`); post a test
-   mention; verify the plugin wakes the REPL within ≤ 2× poll
-   interval (10s default worst case).
-5. **Restart resilience.** Kill the CC session mid-plugin-run; start
-   a fresh one; confirm the new monitor process comes up clean, the
-   SEEN_FILE resets, pending-mentions replay into the first poll.
-6. **Re-enable webhook.** Leave canary in its canonical MCP-only
-   post-state per fenbot; re-enable on UAT bot.
-
-Record observations in `results/uat-YYYY-MM-DD.md` next to this
-README.
+1. **Bot registered.** `install/client.sh` against your sidechat URL
+   writes a `.sidechat/config` with a valid TOKEN.
+2. **Plugin loads.** `claude --plugin-dir <path>` in a fresh CC
+   session shows `sidechat-monitor` under `/plugin` with the
+   `sidechat-mentions` monitor running.
+3. **Baseline with parallel webhook.** If the bot has the webhook
+   listener active, leave it on and measure which path wakes the
+   REPL first for a test mention. Both should produce mention data
+   on-disk; de-dup at the mention-id level handles overlap.
+4. **Isolated plugin-only.** Disable the webhook path on the bot;
+   post a test mention; the plugin should wake the REPL within
+   ~2× poll interval (≤10s with defaults).
+5. **Restart resilience.** Kill the CC session mid-plugin-run and
+   start a fresh one; the new monitor process starts clean and
+   pending-mentions replay into the first poll.
 
 ## Known issues / open questions
 
@@ -112,7 +108,7 @@ README.
   `/mention-check`'s dedup absorbs the second one as a no-op, but the
   transcript shows the duplicate-start briefly. Acceptable; documented.
 - **CLAUDE_PLUGIN_ROOT resolution.** Relies on CC setting the env var
-  before invoking the monitor command. Tested working on 2.1.116 +
+  before invoking the monitor command. Known-working on CC 2.1.116 +
   2.1.117; verify on future CC releases.
 - **Dedup via the on-disk ids file.** The script checks
   `new-mention-ids.txt` directly before writing — no plugin-private

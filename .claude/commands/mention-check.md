@@ -4,23 +4,31 @@ from other users.
 
 ## Instructions
 
-0. **Resolve SIDECHAT_DIR.** Claude Code may be launched from any CWD (especially
-   when woken by a plugin monitor, not a shell script). Inline resolver — avoid
-   depending on a helper script being on disk yet (bootstrap-safe for bots that
-   haven't auto-updated past 2.6.6):
+0. **Resolve SIDECHAT_DIR, self-heal, and mark engaged.** One combined Bash
+   block so cross-shell state isn't a concern (CC spawns a fresh shell per
+   Bash tool call — separate blocks leaked `SIDECHAT_DIR` in 2.6.6; fenbot
+   caught this on canary 2026-04-22). Claude Code may be launched from any
+   CWD (especially when woken by a plugin monitor, not a shell script); the
+   inline resolver below handles `$SIDECHAT_DIR` env override, repo-local
+   `$PWD/.sidechat`, and home-dir `$HOME/.sidechat` in that order.
    ```bash
    for d in "${SIDECHAT_DIR:-}" "$PWD/.sidechat" "$HOME/.sidechat"; do
      [ -n "$d" ] && [ -f "$d/config" ] && { export SIDECHAT_DIR="$d"; break; }
    done
    [ -z "${SIDECHAT_DIR:-}" ] && { echo "No sidechat config found; skipping /mention-check"; exit 0; }
+   # Self-heal if server has rolled a new version. Empty local version is
+   # treated as "outdated" — triggers first-boot auto-update rather than the
+   # silent no-op that kept canary pinned pre-2.6.7 (fenbot 2026-04-22).
+   L=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null)
+   R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL "$SIDECHAT_DIR/config" | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n")
+   [ -n "$R" ] && [ "$L" != "$R" ] && bash "$SIDECHAT_DIR/sc-update.sh" >/dev/null 2>&1 || true
+   # Mark engaged — visible to other users as "Claude opened this mention"
+   "$SIDECHAT_DIR/sc-receipt.sh" engaged
    ```
-   From here on, always use `$SIDECHAT_DIR/...` for sidechat files — never bare `.sidechat/...`. Each subsequent Bash tool call should include `SIDECHAT_DIR=<resolved-value>` inline (Claude Code spawns a fresh shell per call, so exports don't persist across tool invocations).
-
-0a. **Self-heal if the server has rolled a new version** (covers both webhook-injected and cron-polled invocations — the FileChanged hook is best-effort, this guarantees it). Run this Bash one-liner; it's a no-op when versions match:
-   ```bash
-   bash -c 'L=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null); R=$(curl -fsS --max-time 3 "$(grep ^SERVER_URL "$SIDECHAT_DIR/config" | cut -d= -f2)/install/version" 2>/dev/null | tr -d "\r\n"); [ -n "$L" ] && [ -n "$R" ] && [ "$L" != "$R" ] && bash "$SIDECHAT_DIR/sc-update.sh" >/dev/null 2>&1 || true'
-   ```
-   Then mark the new mentions as `engaged` so other users see Claude has opened them: run `"$SIDECHAT_DIR/sc-receipt.sh" engaged` (one Bash call, no output expected).
+   From here on, use `$SIDECHAT_DIR/...` for sidechat files — never bare
+   `.sidechat/...`. Each subsequent Bash tool call should include
+   `SIDECHAT_DIR=<resolved-value>` inline because exports don't persist
+   across separate Bash tool invocations.
 1. Read `$SIDECHAT_DIR/new-mentions.txt`. If it doesn't exist or is empty, say "No new mentions" and stop.
 2. Read BOT_NAME from `$SIDECHAT_DIR/config`.
 3. For each line (format: `[YYYY-MM-DD HH:MM:SS] sender: content`), classify and handle:
