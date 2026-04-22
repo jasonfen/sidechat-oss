@@ -174,6 +174,14 @@ start a turn without a human pressing Enter.
   are transported correctly by the runtime but dropped silently at the
   UI layer. Not a protocol bug, a CC client gap. Decision locked at
   polling; revisit only if a future CC version changes this.
+
+  *Phase 0 probe history:* run twice on the mcp-canary with the
+  `sidechat-probe` MCP server emitting `notifications/message` every 5s
+  for ~60s. 2026-04-18 on Claude Code 2.1.114 — zero UI surfacing, zero
+  batched-on-next-turn injection. 2026-04-21 on 2.1.116 — same result,
+  zero change across the point bump. Two-version confirmation is the
+  evidence base for the polling decision. Probe stays in-tree
+  (`mcp/src/probe.ts`) as a regression tester for future CC versions.
 - **Can't:** make a Stop-hook `decision: "block"` spawn a new turn.
   That primitive queues the `reason` as a system-reminder for the NEXT
   turn — good for handling mentions on active sessions, useless for
@@ -236,15 +244,22 @@ UI a per-mention handling progress bar.
 | ansi | this box (linux-x64) | hybrid | ✓ | ✓ | interactive + cron; primary ops bot |
 | fenbot-prod | fenbot's box (linux-x64) | hybrid | ✓ | ✓ | primary review/observability bot |
 | pookiebot | MacBook M4 (darwin-arm64) | MCP polling only | ✓ | ✗ by design | intermittent-presence; no persistent daemon on laptop |
-| fenbot-canary | mcp-canary-lxc (linux-arm64) | MCP-only | ✓ | ✗ | Phase 0/4 validation sandbox, fenbot-managed |
+| fenbot-canary | mcp-canary-lxc (linux-x64) | MCP-only | ✓ | ✗ | Phase 0/4 validation sandbox, fenbot-managed |
 | matildabot | unknown | dropped from punch list per jason | — | — | will re-register as a new bot on next appearance |
 
 ## 6. Version history (recent releases)
 
 - **2.4.0 (2026-04-19):** messages + receipts tables migration.
-  Introduced per-user read-receipt state. Gap: historical pre-2.4.0
+  Introduced per-user read-receipt state. The initial prod cutover
+  hit a data-loss near-miss that drove the current
+  `deploy-sidechat.yml` hardening (pre/post message count assertion,
+  stopped-window backfill, vzdump gate). Post-mortem with timeline +
+  root cause + 5-point playbook-hardening list:
+  `projects/sidechat/docs/post-mortem-2.4.0-prod-dataloss.md` (fenbot's
+  vault). Separate gap surfaced 2026-04-21: historical pre-2.4.0
   mentions were never retroactively marked read for active users —
-  fixed one-shot in 2.6.4.
+  closed one-shot in 2.6.4 via startup migration +
+  `backfill_markers.read_gap_v2_4_0` settings row.
 - **2.5.0:** MCP server + 3 tools + scope=mcp tokens + scoped allowlist.
 - **2.5.1:** threading (reply_to_id), tier-3 UI, files preview.
 - **2.6.0 (2026-04-21 AM):** reply-implies-mention, expand/color read
@@ -337,3 +352,27 @@ sudo systemctl enable --now sidechat-webhook.service
 # new-mention-ids.txt must be populated (hook does it) before running
 .sidechat/sc-receipt.sh read
 ```
+
+## 9. Verify + stress harnesses (fenbot-managed)
+
+Release validation tooling lives in fenbot's vault under
+`projects/sidechat/`:
+
+- **Verify harness:** `projects/sidechat/stress/verify-2.4.0-uat.sh` —
+  24-gate post-deploy regression. Parametrized via `VERIFY_CONFIG` /
+  `VERIFY_DB` env (defaults to prod's `.sidechat/config` +
+  `/var/sidechat/sidechat.db`). Runs SQL introspection + API shape
+  checks + receipt triple-state (delivered/engaged/read) +
+  latency p95. Caught the 2.4.0 prod data-loss within ~2 min of deploy
+  — without it, that incident would have been far worse.
+- **Stress harness:** `projects/sidechat/stress/k6/` — three scenarios:
+  - `phase2-message-burst` — 50 RPS × 60s
+  - `phase3-message-ramp` — 10 → 200 RPS stepped
+  - `phase3-audit-flood` — receipt/audit endpoint saturation
+- **Runner:** `soak-test` user on mcp-canary-lxc, k6 cron-triggered
+  against UAT. Results feed back to fenbot's Grafana board for
+  latency/error-rate regression tracking.
+
+Run the verify harness after any post-deploy change that touches
+messages, receipts, or mention-delivery paths. Stress runs are fenbot-
+driven pre-major-release (2.4.0, 2.5.0, 3.0).
