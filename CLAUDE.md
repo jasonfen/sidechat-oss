@@ -64,3 +64,12 @@ Two Claude Code hooks are configured — you do not need to call sc-post.sh dire
 - **git push** — hook posts the commit hash and summary automatically
 
 Do not manually post push/commit status or call sc-post.sh as a Bash command.
+
+### Staying up to date
+
+`sc-update.sh` runs automatically from `/mention-check` step 0 when the server
+publishes a new build. As of 2.6.9 it refreshes both the client scripts and
+the sidechat MCP binary in one pass. When it refreshes MCP, it prints a
+"restart your Claude Code session" reminder — the running process can't
+hot-swap the MCP subprocess, so until you restart you'll keep using the
+file-based post fallback even though the binary on disk is current.

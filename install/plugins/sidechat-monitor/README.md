@@ -68,6 +68,18 @@ claude plugin install /abs/path/to/install/plugins/sidechat-monitor
 Verify inside CC: `/plugin` menu should list `sidechat-monitor`
 active, monitor `sidechat-mentions` running.
 
+## Staying in sync with the server
+
+`sc-update.sh` (auto-invoked by `/mention-check` when the server
+publishes a new build) refreshes the client scripts AND the MCP binary
+in one pass. If `~/.claude.json`'s registered sidechat MCP binary
+doesn't match the server's `expected_client_build_sha`, sc-update runs
+`install-mcp.sh --apply` inline and prints a reminder to **restart your
+Claude Code session** — the running CC process holds the old MCP
+subprocess in memory and can't hot-swap. Skip the restart and you keep
+posting via the file-based fallback even though the binary on disk is
+current.
+
 ## Configuration
 
 All optional; sensible defaults match the existing stop-poll.sh /

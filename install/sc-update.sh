@@ -153,6 +153,33 @@ if SERVER_VER=$(curl -fsSL "$SERVER_URL/install/version" 2>/dev/null); then
   rm -f "$SCRIPT_DIR/update-available"
 fi
 
+# MCP client binary drift probe. sc-update.sh syncs install-mcp.sh to disk but
+# doesn't run it; the registered MCP subprocess stays pinned to whatever
+# version the operator last installed. Pre-2.6.9 that gap went unnoticed
+# because /mention-check never reached for the MCP tool surface. Now: compare
+# the version embedded in ~/.claude.json's sidechat-mcp command path against
+# the server's expected_client_build_sha and refresh on drift. The running CC
+# session still holds the old subprocess in memory; user must restart CC to
+# see the new tool surface.
+if command -v jq &>/dev/null && [[ -f "$HOME/.claude.json" ]] && [[ -x "$SCRIPT_DIR/install-mcp.sh" ]]; then
+  CURRENT_MCP_CMD=$(jq -r '.mcpServers.sidechat.command // empty' "$HOME/.claude.json" 2>/dev/null)
+  if [[ -n "$CURRENT_MCP_CMD" ]]; then
+    # Binary filename ends in -v<VERSION>; legacy/dev paths without that
+    # suffix are treated as drift so the next run lands on a versioned binary.
+    CURRENT_MCP_VER=$(basename "$CURRENT_MCP_CMD" | sed -n 's/.*-v\([0-9][0-9.]*\)$/\1/p')
+    SERVER_EXPECTS=$(curl -fsS --max-time 3 "$SERVER_URL/install/mcp-version" 2>/dev/null \
+      | jq -r '.expected_client_build_sha // empty' 2>/dev/null)
+    if [[ -n "$SERVER_EXPECTS" && "$CURRENT_MCP_VER" != "$SERVER_EXPECTS" ]]; then
+      echo "MCP drift: registered=v${CURRENT_MCP_VER:-<none>}, server expects=v$SERVER_EXPECTS. Refreshing..."
+      if SIDECHAT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/install-mcp.sh" --apply >/dev/null 2>&1; then
+        echo "  ⚠ MCP binary updated to v$SERVER_EXPECTS. Restart your Claude Code session to pick up the new tool surface (the running process still holds the old MCP subprocess)."
+      else
+        echo "  MCP refresh failed (run install-mcp.sh --apply manually)."
+      fi
+    fi
+  fi
+fi
+
 # Re-auth + restart in one step if we already have a token. sc-auth.sh handles
 # the listener restart itself (so the new code AND new token take effect on a
 # single bounce). For never-authed clients, restart the listener directly so
