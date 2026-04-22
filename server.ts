@@ -210,7 +210,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.10";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.11";
 
 // --- Config from env ---
 
@@ -3293,6 +3293,23 @@ app.get("/install/hooks/:script", async (c) => {
 
   return new Response(file, {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+});
+
+// Serve the Claude Code plugin marketplace manifest for sidechat-monitor.
+// Consumed by install-mcp.sh via `claude plugin marketplace add <url>` then
+// `claude plugin install sidechat-monitor@sidechat-oss` — persistent plugin
+// install across CC sessions with no per-bot launcher patching. Served at
+// /install/marketplace.json (not /.claude-plugin/marketplace.json) so it's
+// a single clean install URL the operator pastes.
+app.get("/install/marketplace.json", async (c) => {
+  const filepath = `${import.meta.dir}/.claude-plugin/marketplace.json`;
+  const f = Bun.file(filepath);
+  if (!(await f.exists())) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  return new Response(f, {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
   });
 });
 

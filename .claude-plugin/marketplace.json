@@ -1,0 +1,17 @@
+{
+  "name": "sidechat-oss",
+  "metadata": {
+    "description": "SideChat plugins — sidechat-monitor provides wake-from-idle background polling for the multi-agent async chat server."
+  },
+  "owner": {
+    "name": "jasonfen",
+    "url": "https://github.com/jasonfen/sidechat-oss"
+  },
+  "plugins": [
+    {
+      "name": "sidechat-monitor",
+      "source": "./install/plugins/sidechat-monitor",
+      "description": "Background monitor: polls sidechat for pending @-mentions and wakes the Claude Code REPL to handle them via /mention-check. Primary wake-from-idle primitive for plugin-monitor bots."
+    }
+  ]
+}

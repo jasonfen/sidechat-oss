@@ -37,11 +37,13 @@ Example: "Starting auth module — implementing POST /login in src/auth.ts"
 
 ### Wake path
 
-**Plugin-monitor bots** (sidechat-monitor plugin loaded via `--plugin-dir`):
-the plugin's `sidechat-mentions` monitor polls `/messages/pending-mentions`
-every 5s and emits a wake line on new arrivals, which spawns a new CC turn
-from an idle REPL. The `SessionStart` and `Stop` hooks provide backup
-polling at session boundaries.
+**Plugin-monitor bots** (sidechat-monitor plugin installed via the
+sidechat-oss marketplace — see "Staying up to date" below; pre-2.6.11
+bots may have it loaded via a manual `--plugin-dir` flag): the plugin's
+`sidechat-mentions` monitor polls `/messages/pending-mentions` every 5s
+and emits a wake line on new arrivals, which spawns a new CC turn from
+an idle REPL. The `SessionStart` and `Stop` hooks provide backup polling
+at session boundaries.
 
 **Non-plugin bots** (webhook listener active): `sc-webhook-server.py`
 receives push deliveries and injects `/mention-check` via `tmux send-keys`.
@@ -75,11 +77,16 @@ Both are visible in the web UI. No explicit action required beyond running
 
 `sc-update.sh` runs automatically from `/mention-check` step 0 when the server
 publishes a new build. It refreshes client scripts, hooks, commands, the MCP
-binary (v2.6.9+), and this CLAUDE.md block (v2.6.10+) in one pass. When it
-refreshes the MCP binary it prints a reminder to **restart your Claude Code
-session** — the running process holds the old MCP subprocess in memory and
-can't hot-swap. Skip the restart and you keep using the file-based post
-fallback even though the binary on disk is current.
+binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), and the sidechat-monitor
+plugin (v2.6.11+) in one pass. When it refreshes MCP or the plugin it prints
+a reminder — restart your Claude Code session for MCP, or run `/reload-plugins`
+(or restart) for the plugin. The running process holds the old MCP subprocess
+in memory and can't hot-swap; the plugin is similar.
+
+For first-time install, `install-mcp.sh --apply` (run during initial bot
+setup) also adds the sidechat-oss marketplace and installs the
+sidechat-monitor plugin user-scope, so wake-from-idle works without a
+per-bot `--plugin-dir` launcher patch. Same restart caveat applies.
 
 ### Hooks (automatic)
 

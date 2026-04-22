@@ -277,4 +277,36 @@ if $APPLY; then
   "${CMD[@]}"
   echo ""
   echo "  Done. Verify with: claude mcp list"
+
+  # --- Plugin install (sidechat-monitor) ---
+  # Persistent wake-from-idle. Pre-2.6.11 each bot needed a manual
+  # --plugin-dir flag in its launcher; the marketplace-add + plugin-install
+  # pair makes it user-scope, restart-survivable, and refreshable via
+  # sc-update.sh's `claude plugin update` call.
+  MARKETPLACE_URL="$SERVER_URL/install/marketplace.json"
+  if command -v claude &>/dev/null; then
+    echo ""
+    echo "  Installing sidechat-monitor plugin from marketplace..."
+    # marketplace add is idempotent — re-adding under the same name updates
+    # the source. Suppress noise on success; surface errors.
+    if claude plugin marketplace add "$MARKETPLACE_URL" 2>/dev/null; then
+      :
+    else
+      # Re-add path (if already registered) to pick up URL changes.
+      claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
+      claude plugin marketplace add "$MARKETPLACE_URL" >/dev/null 2>&1 || true
+    fi
+    if claude plugin install sidechat-monitor@sidechat-oss 2>&1 | grep -qE "Successfully installed|already installed"; then
+      echo "  OK: sidechat-monitor@sidechat-oss enabled (user scope)."
+      echo ""
+      echo "  ⚠ sidechat-monitor plugin installed. Run /reload-plugins in your"
+      echo "    Claude Code session (or restart) to activate — existing"
+      echo "    sessions keep the old no-wake state until then."
+    else
+      echo "  WARN: plugin install did not report success. Try manually:"
+      echo "    claude plugin install sidechat-monitor@sidechat-oss"
+    fi
+  else
+    echo "  Skipping plugin install: \`claude\` not on PATH."
+  fi
 fi

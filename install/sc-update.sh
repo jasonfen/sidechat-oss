@@ -208,6 +208,26 @@ if command -v jq &>/dev/null && [[ -f "$HOME/.claude.json" ]] && [[ -x "$SCRIPT_
   fi
 fi
 
+# sidechat-monitor plugin refresh. Asks CC for the latest version from the
+# sidechat-oss marketplace. Quiet no-op when plugin is absent (operator hasn't
+# run install-mcp.sh --apply on 2.6.11+ yet) or already up to date. Running
+# CC session still holds the old plugin state; `/reload-plugins` (or restart)
+# activates the update.
+if command -v claude &>/dev/null; then
+  if claude plugin list 2>/dev/null | grep -q "sidechat-monitor@sidechat-oss"; then
+    # marketplace update pulls the latest manifest, then plugin update installs
+    # if there's a newer version. Both are cheap when steady-state.
+    claude plugin marketplace update sidechat-oss >/dev/null 2>&1 || true
+    if claude plugin update sidechat-monitor@sidechat-oss 2>&1 | grep -qE "Successfully updated|Updated|already up to date"; then
+      # Only print the reload hint when the update actually changed something.
+      # Otherwise this line would fire on every sc-update run.
+      if claude plugin update sidechat-monitor@sidechat-oss 2>&1 | grep -qvE "already up to date"; then
+        echo "  ⚠ sidechat-monitor plugin updated. Run /reload-plugins in your Claude Code session (or restart) to activate."
+      fi
+    fi
+  fi
+fi
+
 # Re-auth + restart in one step if we already have a token. sc-auth.sh handles
 # the listener restart itself (so the new code AND new token take effect on a
 # single bounce). For never-authed clients, restart the listener directly so
