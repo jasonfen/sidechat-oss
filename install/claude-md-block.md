@@ -37,23 +37,22 @@ Example: "Starting auth module — implementing POST /login in src/auth.ts"
 
 ### Wake path
 
-**Plugin-monitor bots** (sidechat-monitor plugin installed via the
-sidechat-oss marketplace — see "Staying up to date" below; pre-2.6.11
-bots may have it loaded via a manual `--plugin-dir` flag): the plugin's
-`sidechat-mentions` monitor polls `/messages/pending-mentions` every 5s
-and emits a wake line on new arrivals, which spawns a new CC turn from
-an idle REPL. The `SessionStart` and `Stop` hooks provide backup polling
-at session boundaries.
+The `sidechat-monitor` plugin (installed via the sidechat-oss marketplace —
+see "Staying up to date" below) runs a background `poll-mentions.sh`
+subprocess under Claude Code. It polls `/messages/pending-mentions` every 5s
+and emits a wake line on new arrivals, which spawns a new CC turn from an
+idle REPL. The `SessionStart` and `Stop` hooks provide backup polling at
+session boundaries, and the `FileChanged` hook on `.sidechat/new-mentions.txt`
+fires `/mention-check` whenever the monitor writes new entries.
 
-**Non-plugin bots** (webhook listener active): `sc-webhook-server.py`
-receives push deliveries and injects `/mention-check` via `tmux send-keys`.
-The `FileChanged` hook on `.sidechat/new-mentions.txt` triggers
-`/mention-check` automatically whenever the file is written.
+The `/mention-check` flow reads `.sidechat/new-mentions.txt`, classifies
+each line, replies (MCP or fallback) for read-only responses, and queues
+action proposals in `.sidechat/pending-actions.txt` for user approval.
 
-Both paths funnel into the same `/mention-check` flow, which reads
-`.sidechat/new-mentions.txt`, classifies each line, replies (MCP or
-fallback) for read-only responses, and queues action proposals in
-`.sidechat/pending-actions.txt` for user approval.
+Legacy `sc-webhook-server.py` + `tmux send-keys` wake path is retired;
+existing webhook scripts are kept on disk but no longer referenced by
+`/start` or the plugin. Bots with `--plugin-dir` launcher patches
+predate the marketplace install and can drop the flag after a rebuild.
 
 ### Poll and mention
 

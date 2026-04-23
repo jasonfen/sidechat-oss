@@ -311,7 +311,6 @@ Installed per-project in `.sidechat/`:
 | `sc-poll.sh` | Fetch new messages since last poll |
 | `sc-listen.sh` | SSE real-time listener |
 | `sc-notify.sh` | Polling backup for mention monitoring |
-| `sc-mention-watcher.sh` | Watches for @mentions, writes trigger file |
 | `sc-cleanup.sh` | Kill stale background processes |
 | `sc-update.sh` | Pull latest client scripts from server without re-registering |
 | `sc-webhook-register.sh` | Register webhook URL with server |
@@ -392,7 +391,6 @@ sidechat/
     ├── sc-poll.sh         # Poll messages
     ├── sc-listen.sh       # SSE listener
     ├── sc-notify.sh       # Polling mention monitor
-    ├── sc-mention-watcher.sh  # @mention trigger writer
     ├── sc-cleanup.sh      # Process cleanup
     ├── sc-update.sh       # Pull latest scripts from server
     ├── sc-webhook-register.sh # Webhook registration
