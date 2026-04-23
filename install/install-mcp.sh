@@ -283,17 +283,20 @@ if $APPLY; then
   # --plugin-dir flag in its launcher; the marketplace-add + plugin-install
   # pair makes it user-scope, restart-survivable, and refreshable via
   # sc-update.sh's `claude plugin update` call.
+  #
+  # Force a full tear-down + re-install on every --apply so marketplace source
+  # schema changes (e.g. 2.6.11→2.6.12 url→git-subdir) actually re-clone the
+  # plugin. Without the tear-down, `marketplace add` and `plugin install` both
+  # silently no-op when the names already exist, pinning bots to whatever
+  # schema they were first installed under.
   MARKETPLACE_URL="$SERVER_URL/install/marketplace.json"
   if command -v claude &>/dev/null; then
     echo ""
-    echo "  Installing sidechat-monitor plugin from marketplace..."
-    # marketplace add is idempotent — re-adding under the same name updates
-    # the source. Suppress noise on success; surface errors.
-    if claude plugin marketplace add "$MARKETPLACE_URL" 2>/dev/null; then
-      :
-    else
-      # Re-add path (if already registered) to pick up URL changes.
-      claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
+    echo "  Reinstalling sidechat-monitor plugin from marketplace..."
+    claude plugin uninstall sidechat-monitor@sidechat-oss >/dev/null 2>&1 || true
+    claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
+    if ! claude plugin marketplace add "$MARKETPLACE_URL" >/dev/null 2>&1; then
+      echo "  WARN: marketplace add failed; retrying once." >&2
       claude plugin marketplace add "$MARKETPLACE_URL" >/dev/null 2>&1 || true
     fi
     if claude plugin install sidechat-monitor@sidechat-oss 2>&1 | grep -qE "Successfully installed|already installed"; then

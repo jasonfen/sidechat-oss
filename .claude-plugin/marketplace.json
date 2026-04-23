@@ -12,7 +12,7 @@
       "name": "sidechat-monitor",
       "description": "Background monitor: polls sidechat for pending @-mentions and wakes the Claude Code REPL to handle them via /mention-check. Primary wake-from-idle primitive for plugin-monitor bots.",
       "source": {
-        "source": "url",
+        "source": "git-subdir",
         "url": "https://github.com/jasonfen/sidechat-oss.git",
         "path": "install/plugins/sidechat-monitor",
         "ref": "main"
