@@ -210,7 +210,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.16";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.17";
 
 // --- Config from env ---
 
@@ -1406,6 +1406,107 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   .md-preview-body th { background: #161b22; }
   .md-preview-body hr { border: 0; border-top: 1px solid #30363d; margin: 12px 0; }
   .md-preview-body img { max-width: 100%; height: auto; }
+  /* Right-side drawer for previews on desktop (≥900px). Mobile keeps the
+     inline <details> expand — no horizontal budget for a drawer there. */
+  #preview-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 45vw;
+    max-width: 720px;
+    background: #0d1117;
+    border-left: 1px solid #30363d;
+    box-shadow: -4px 0 16px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.18s ease-out;
+    z-index: 1000;
+  }
+  #preview-drawer.open { transform: translateX(0); }
+  #preview-drawer .drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+    flex: 0 0 auto;
+  }
+  #preview-drawer .drawer-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #c9d1d9;
+    font-size: 13px;
+  }
+  #preview-drawer .drawer-close {
+    background: transparent;
+    border: 0;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  #preview-drawer .drawer-close:hover { color: #f0f6fc; background: #21262d; }
+  #preview-drawer .drawer-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 14px 18px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #c9d1d9;
+  }
+  /* Reuse md-preview-body markdown styling inside the drawer. */
+  #preview-drawer .drawer-body .txt-preview-body {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px; color: #c9d1d9;
+  }
+  #preview-drawer .drawer-body h1, #preview-drawer .drawer-body h2,
+  #preview-drawer .drawer-body h3, #preview-drawer .drawer-body h4,
+  #preview-drawer .drawer-body h5, #preview-drawer .drawer-body h6 {
+    margin: 12px 0 6px; line-height: 1.25; color: #f0f6fc;
+  }
+  #preview-drawer .drawer-body h1 { font-size: 18px; border-bottom: 1px solid #30363d; padding-bottom: 4px; }
+  #preview-drawer .drawer-body h2 { font-size: 16px; border-bottom: 1px solid #30363d; padding-bottom: 3px; }
+  #preview-drawer .drawer-body h3 { font-size: 14px; }
+  #preview-drawer .drawer-body p { margin: 6px 0; }
+  #preview-drawer .drawer-body ul, #preview-drawer .drawer-body ol { margin: 6px 0; padding-left: 24px; }
+  #preview-drawer .drawer-body li { margin: 2px 0; }
+  #preview-drawer .drawer-body code {
+    background: #161b22; border: 1px solid #30363d; padding: 1px 5px;
+    border-radius: 4px; font-size: 12px; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  }
+  #preview-drawer .drawer-body pre {
+    background: #161b22; border: 1px solid #30363d; padding: 10px;
+    border-radius: 6px; overflow-x: auto; margin: 8px 0;
+  }
+  #preview-drawer .drawer-body pre code { background: transparent; border: 0; padding: 0; font-size: 12px; }
+  #preview-drawer .drawer-body blockquote {
+    margin: 8px 0; padding: 0 10px; border-left: 3px solid #30363d; color: #8b949e;
+  }
+  #preview-drawer .drawer-body a { color: #58a6ff; }
+  #preview-drawer .drawer-body table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+  #preview-drawer .drawer-body th, #preview-drawer .drawer-body td { border: 1px solid #30363d; padding: 4px 8px; }
+  #preview-drawer .drawer-body th { background: #161b22; }
+  #preview-drawer .drawer-body hr { border: 0; border-top: 1px solid #30363d; margin: 12px 0; }
+  #preview-drawer .drawer-body img { max-width: 100%; height: auto; }
+  /* Hide inline <details> body on desktop when drawer-active; keep it for <900px. */
+  @media (min-width: 900px) {
+    .md-preview.drawer-active > .md-preview-body { display: none; }
+  }
+  .md-preview.drawer-active > summary { background: #1f2937; }
+  /* Hide drawer entirely on narrow screens even if accidentally opened. */
+  @media (max-width: 899px) {
+    #preview-drawer { display: none; }
+  }
   .md-preview-error { color: #f85149; font-size: 12px; padding: 8px 14px; }
   #pending-files {
     display: none;
@@ -2072,57 +2173,134 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
 
   // Markdown attachment preview: fetch + render on first expand, sanitize with
   // DOMPurify, cap fetch at 200KB so a huge .md can't wedge the viewer.
+  // Desktop (>=900px) routes rendering into a right-side drawer instead of
+  // expanding inline, so the chat column doesn't reflow. Mobile keeps the
+  // native <details> expand behavior.
   var MD_PREVIEW_CAP_BYTES = 200 * 1024;
-  function attachMdPreview(details) {
-    var loaded = false;
-    details.addEventListener('toggle', function() {
-      if (!details.open || loaded) return;
-      loaded = true;
-      var body = details.querySelector('.md-preview-body');
-      var fileId = details.getAttribute('data-file-id');
-      var declaredSize = parseInt(details.getAttribute('data-file-size') || '0', 10);
-      if (declaredSize > MD_PREVIEW_CAP_BYTES) {
-        body.innerHTML = '<div class="md-preview-error">File too large for preview (' +
-          (declaredSize / 1024).toFixed(0) + ' KB &gt; ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB). Use the download link.</div>';
-        return;
-      }
-      var previewMode = details.getAttribute('data-mode') || 'md';
-      if (previewMode === 'md' && (typeof marked === 'undefined' || typeof DOMPurify === 'undefined')) {
-        body.innerHTML = '<div class="md-preview-error">Markdown renderer not available.</div>';
-        return;
-      }
-      fetch('/files/' + fileId + '/download', { credentials: 'same-origin' })
-        .then(function(r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.blob();
-        })
-        .then(function(blob) {
-          if (blob.size > MD_PREVIEW_CAP_BYTES) {
-            throw new Error('File exceeds ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB cap');
-          }
-          return blob.text();
-        })
-        .then(function(text) {
-          var mode = details.getAttribute('data-mode') || 'md';
-          if (mode === 'txt') {
-            // Plaintext: just escape + pre-wrap. No markdown parse, no sanitizer.
-            body.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
-            return;
-          }
-          var rendered;
-          try { rendered = marked.parse(text, { breaks: true, gfm: true }); }
-          catch (e) { rendered = '<pre>' + escapeHtml(text) + '</pre>'; }
-          body.innerHTML = DOMPurify.sanitize(rendered, {
-            // img dropped so a tracker pixel in attacker-supplied markdown
-            // can't exfil a page visit to an external host.
-            FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'img', 'svg', 'math'],
-            FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick'],
-            ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
-          });
-        })
-        .catch(function(err) {
-          body.innerHTML = '<div class="md-preview-error">Failed to load preview: ' + escapeHtml(String(err.message || err)) + '</div>';
+  var desktopMQL = window.matchMedia('(min-width: 900px)');
+  var drawerEl = null;
+  var activeDetails = null;
+
+  function renderPreviewInto(details, target) {
+    target.innerHTML = 'Loading\\u2026';
+    var declaredSize = parseInt(details.getAttribute('data-file-size') || '0', 10);
+    if (declaredSize > MD_PREVIEW_CAP_BYTES) {
+      target.innerHTML = '<div class="md-preview-error">File too large for preview (' +
+        (declaredSize / 1024).toFixed(0) + ' KB &gt; ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB). Use the download link.</div>';
+      return;
+    }
+    var mode = details.getAttribute('data-mode') || 'md';
+    if (mode === 'md' && (typeof marked === 'undefined' || typeof DOMPurify === 'undefined')) {
+      target.innerHTML = '<div class="md-preview-error">Markdown renderer not available.</div>';
+      return;
+    }
+    var fileId = details.getAttribute('data-file-id');
+    fetch('/files/' + fileId + '/download', { credentials: 'same-origin' })
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      })
+      .then(function(blob) {
+        if (blob.size > MD_PREVIEW_CAP_BYTES) {
+          throw new Error('File exceeds ' + (MD_PREVIEW_CAP_BYTES / 1024) + ' KB cap');
+        }
+        return blob.text();
+      })
+      .then(function(text) {
+        if (mode === 'txt') {
+          target.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
+          return;
+        }
+        var rendered;
+        try { rendered = marked.parse(text, { breaks: true, gfm: true }); }
+        catch (e) { rendered = '<pre>' + escapeHtml(text) + '</pre>'; }
+        target.innerHTML = DOMPurify.sanitize(rendered, {
+          // img dropped so a tracker pixel in attacker-supplied markdown
+          // can't exfil a page visit to an external host.
+          FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'img', 'svg', 'math'],
+          FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick'],
+          ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
         });
+      })
+      .catch(function(err) {
+        target.innerHTML = '<div class="md-preview-error">Failed to load preview: ' + escapeHtml(String(err.message || err)) + '</div>';
+      });
+  }
+
+  function getDrawer() {
+    if (drawerEl) return drawerEl;
+    drawerEl = document.createElement('aside');
+    drawerEl.id = 'preview-drawer';
+    drawerEl.innerHTML = '<header class="drawer-header">' +
+      '<span class="drawer-title"></span>' +
+      '<button type="button" class="drawer-close" aria-label="Close preview">&times;</button>' +
+      '</header>' +
+      '<div class="drawer-body"></div>';
+    document.body.appendChild(drawerEl);
+    drawerEl.querySelector('.drawer-close').addEventListener('click', closeDrawer);
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && drawerEl.classList.contains('open')) closeDrawer();
+    });
+    document.addEventListener('click', function(e) {
+      if (!drawerEl.classList.contains('open')) return;
+      if (drawerEl.contains(e.target)) return;
+      if (e.target.closest && e.target.closest('.md-preview > summary')) return;
+      closeDrawer();
+    });
+    return drawerEl;
+  }
+
+  function closeDrawer() {
+    if (!drawerEl) return;
+    drawerEl.classList.remove('open');
+    if (activeDetails) {
+      activeDetails.classList.remove('drawer-active');
+      if (activeDetails.open) activeDetails.open = false;
+      activeDetails = null;
+    }
+  }
+
+  function openInDrawer(details) {
+    var drawer = getDrawer();
+    var labelEl = details.querySelector('.md-preview-label');
+    drawer.querySelector('.drawer-title').textContent = labelEl ? labelEl.textContent : 'Preview';
+    if (activeDetails && activeDetails !== details) {
+      activeDetails.classList.remove('drawer-active');
+      if (activeDetails.open) activeDetails.open = false;
+    }
+    activeDetails = details;
+    details.classList.add('drawer-active');
+    // Force the <details> to an "open" state so the inline body still carries
+    // the cached render (cheap no-op if already open). CSS hides the inline
+    // body while drawer-active on desktop.
+    details.open = true;
+    drawer.classList.add('open');
+    renderPreviewInto(details, drawer.querySelector('.drawer-body'));
+  }
+
+  function attachMdPreview(details) {
+    var inlineLoaded = false;
+    var summary = details.querySelector('summary');
+    if (summary) {
+      summary.addEventListener('click', function(e) {
+        // Let the inline download link bubble through to its href handler.
+        if (e.target && e.target.closest && e.target.closest('.md-preview-download')) return;
+        if (!desktopMQL.matches) return; // mobile: native <details> toggle
+        e.preventDefault();
+        if (details.classList.contains('drawer-active') && drawerEl && drawerEl.classList.contains('open')) {
+          closeDrawer();
+        } else {
+          openInDrawer(details);
+        }
+      });
+    }
+    details.addEventListener('toggle', function() {
+      // Render into the inline body when opened on mobile. On desktop the
+      // drawer handles rendering; the inline body stays hidden via CSS.
+      if (!details.open || inlineLoaded) return;
+      if (desktopMQL.matches) return;
+      inlineLoaded = true;
+      renderPreviewInto(details, details.querySelector('.md-preview-body'));
     });
   }
 
