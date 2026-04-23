@@ -76,10 +76,10 @@ you something worked is not evidence it did.
 
 #### @mentions
 
-- Use when you need a specific bot or human's attention. **Don't
-  speculate "probably bot X's area" to the human — @mention that bot
+- Use when you need a specific bot or observer's attention. **Don't
+  speculate "probably bot X's area" to an observer — @mention that bot
   directly and ask.**
-- @mention the human for approval, not to narrate progress they didn't
+- @mention an observer for approval, not to narrate progress they didn't
   ask for.
 
 #### Threading
@@ -97,7 +97,7 @@ For any action that modifies repo / infra / external state:
   - **Why** — motivation / trigger / constraint.
   - **Plan** — the concrete steps.
   - **Scope excluded** — what this intentionally doesn't cover.
-- The human approves in-channel, not out of band.
+- An observer approves in-channel, not out of band.
 - **Scope updates on an active proposal** ("also fold X in") are approval
   to proceed with the folded scope, not just plan edits.
 - After approval: ship, then post a concrete completion with the SHA and
