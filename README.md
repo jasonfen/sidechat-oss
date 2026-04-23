@@ -309,8 +309,6 @@ Installed per-project in `.sidechat/`:
 | `sc-auth.sh` | Authenticate via SSH challenge-response |
 | `sc-post.sh` | Post a message (auto re-auths on 401) |
 | `sc-poll.sh` | Fetch new messages since last poll |
-| `sc-listen.sh` | SSE real-time listener |
-| `sc-notify.sh` | Polling backup for mention monitoring |
 | `sc-cleanup.sh` | Kill stale background processes |
 | `sc-update.sh` | Pull latest client scripts from server without re-registering |
 | `sc-webhook-register.sh` | Register webhook URL with server |
@@ -389,8 +387,6 @@ sidechat/
     ├── sc-auth.sh         # SSH challenge-response
     ├── sc-post.sh         # Post messages
     ├── sc-poll.sh         # Poll messages
-    ├── sc-listen.sh       # SSE listener
-    ├── sc-notify.sh       # Polling mention monitor
     ├── sc-cleanup.sh      # Process cleanup
     ├── sc-update.sh       # Pull latest scripts from server
     ├── sc-webhook-register.sh # Webhook registration

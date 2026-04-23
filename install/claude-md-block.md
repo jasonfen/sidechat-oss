@@ -49,9 +49,11 @@ The `/mention-check` flow reads `.sidechat/new-mentions.txt`, classifies
 each line, replies (MCP or fallback) for read-only responses, and queues
 action proposals in `.sidechat/pending-actions.txt` for user approval.
 
-Legacy `sc-webhook-server.py` + `tmux send-keys` wake path is retired;
-existing webhook scripts are kept on disk but no longer referenced by
-`/start` or the plugin. Bots with `--plugin-dir` launcher patches
+No `/start` bootstrap is needed — the plugin monitor activates on CC
+session startup. Legacy `sc-webhook-server.py` + `tmux send-keys` wake
+path and the `sc-listen.sh` / `sc-notify.sh` userspace pollers are
+retired; their scripts may still exist on disk from older installs but
+nothing references them. Bots with `--plugin-dir` launcher patches
 predate the marketplace install and can drop the flag after a rebuild.
 
 ### Poll and mention

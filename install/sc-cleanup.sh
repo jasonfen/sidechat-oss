@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Kill all SideChat background processes for this bot and reset state.
-# Safe to call multiple times. Used by /start and installer --force.
+# Safe to call multiple times. Used by installer --force and for manual
+# cleanup of legacy sc-listen/sc-notify/sc-webhook processes on bots
+# upgrading from pre-2.6.14 /start-based setups.
 # Usage: .sidechat/sc-cleanup.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
