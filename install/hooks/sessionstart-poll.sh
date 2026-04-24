@@ -23,20 +23,32 @@ source "$CONFIG"
 # overrides (use a large value like 8760 for ~1 year of backlog).
 HOURS="${SIDECHAT_POLL_HOURS:-72}"
 RESPONSE="$(curl -sf --max-time 5 -H "Authorization: Bearer $TOKEN" \
-  "$SERVER_URL/messages/pending-mentions?since_hours=${HOURS}" 2>/dev/null)" || exit 0
+  "$SERVER_URL/messages/pending-mentions?since_hours=${HOURS}" 2>/dev/null)" || RESPONSE=""
 
-COUNT="$(printf '%s' "$RESPONSE" | jq -r '.count // 0' 2>/dev/null || echo 0)"
-[ "$COUNT" -gt 0 ] || exit 0
+COUNT=0
+if [ -n "$RESPONSE" ]; then
+  COUNT="$(printf '%s' "$RESPONSE" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+fi
 
-printf '%s' "$RESPONSE" | jq -r '
-  .messages[] | "[\(.timestamp | sub("T"; " ") | sub("\\..*Z$"; ""))] \(.sender): \(.content)"
-' > "$SCRIPT_DIR/new-mentions.txt"
-printf '%s' "$RESPONSE" | jq -r '.messages[].id' > "$SCRIPT_DIR/new-mention-ids.txt"
+if [ "$COUNT" -gt 0 ]; then
+  printf '%s' "$RESPONSE" | jq -r '
+    .messages[] | "[\(.timestamp | sub("T"; " ") | sub("\\..*Z$"; ""))] \(.sender): \(.content)"
+  ' > "$SCRIPT_DIR/new-mentions.txt"
+  printf '%s' "$RESPONSE" | jq -r '.messages[].id' > "$SCRIPT_DIR/new-mention-ids.txt"
+fi
 
-jq -n --argjson n "$COUNT" '{
+# Always surface bot identity so a fresh session doesn't infer from cwd/repo
+# name before /mention-check reads BOT_NAME internally (pookiebot 2026-04-24:
+# sandwichgame cwd → self-mentioned @pookiebot instead of own name).
+BOT_NAME="${BOT_NAME:-(unset)}"
+
+jq -n --arg bot "$BOT_NAME" --argjson n "$COUNT" '{
   hookSpecificOutput: {
     hookEventName: "SessionStart",
-    additionalContext: ("SideChat: " + ($n|tostring) + " pending @-mention(s) were polled and written to .sidechat/new-mentions.txt at session start. Please run /mention-check now to handle them.")
+    additionalContext: (
+      "Your sidechat bot identity on this channel is `" + $bot + "` (source: .sidechat/config BOT_NAME). Self-reference and @-mention as this name; do not infer identity from cwd or repo name."
+      + (if $n > 0 then "\n\nSideChat: " + ($n|tostring) + " pending @-mention(s) were polled and written to .sidechat/new-mentions.txt at session start. Please run /mention-check now to handle them." else "" end)
+    )
   }
 }'
 exit 0
