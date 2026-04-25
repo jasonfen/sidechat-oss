@@ -1053,7 +1053,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     #messages { padding: 8px 10px; }
     #input-bar { padding: 6px 8px; }
     #input-bar form { gap: 6px; }
-    #input-bar input { font-size: 16px; padding: 6px 10px; min-width: 0; }
+    #input-bar input,
+    #input-bar textarea { font-size: 16px; padding: 6px 10px; min-width: 0; }
+    #input-bar textarea { min-height: 32px; max-height: 128px; }
     #input-bar button { padding: 6px 10px; font-size: 14px; flex-shrink: 0; }
     #attach-btn { padding: 0 6px; flex-shrink: 0; }
     .msg { font-size: 13px; }
@@ -1580,7 +1582,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     display: flex;
     gap: 8px;
   }
-  #input-bar input {
+  #input-bar input,
+  #input-bar textarea {
     flex: 1;
     background: #161b22;
     border: 1px solid #30363d;
@@ -1591,7 +1594,15 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     padding: 8px 12px;
     outline: none;
   }
-  #input-bar input:focus {
+  #input-bar textarea {
+    resize: none;
+    line-height: 1.4;
+    min-height: 38px;
+    max-height: 152px;
+    overflow-y: auto;
+  }
+  #input-bar input:focus,
+  #input-bar textarea:focus {
     border-color: #58a6ff;
   }
   #input-bar button {
@@ -1685,7 +1696,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       <form id="msg-form">
         <button type="button" id="attach-btn" title="Attach file">&#x1F4CE;</button>
         <input type="file" id="file-input" multiple style="display:none" />
-        <input type="text" id="msg-input" placeholder="Type a message..." autocomplete="off" />
+        <textarea id="msg-input" rows="1" placeholder="Type a message... (Shift+Enter for newline)" autocomplete="off"></textarea>
         <button type="submit" id="msg-send">Send</button>
       </form>
     </div>
@@ -2630,7 +2641,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     return autocompleteEl.querySelectorAll('.ac-item');
   }
 
-  msgInput.addEventListener('input', function() { acIndex = -1; showAC(); });
+  function autoGrowInput() {
+    msgInput.style.height = 'auto';
+    msgInput.style.height = Math.min(msgInput.scrollHeight, 152) + 'px';
+  }
+  msgInput.addEventListener('input', function() { acIndex = -1; showAC(); autoGrowInput(); });
   msgInput.addEventListener('blur', function() {
     setTimeout(function() { autocompleteEl.style.display = 'none'; }, 150);
   });
@@ -2642,10 +2657,12 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         e.preventDefault();
         acIndex = Math.min(acIndex + 1, items.length - 1);
         items.forEach(function(el, i) { el.className = 'ac-item' + (i === acIndex ? ' selected' : ''); });
+        return;
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         acIndex = Math.max(acIndex - 1, 0);
         items.forEach(function(el, i) { el.className = 'ac-item' + (i === acIndex ? ' selected' : ''); });
+        return;
       } else if (e.key === 'Tab' || e.key === 'Enter') {
         if (acIndex >= 0 && acIndex < items.length) {
           e.preventDefault();
@@ -2656,7 +2673,14 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       } else if (e.key === 'Escape') {
         autocompleteEl.style.display = 'none';
         acIndex = -1;
+        return;
       }
+    }
+    // Enter (no shift) submits the form; Shift+Enter falls through for a native newline.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      if (typeof msgForm.requestSubmit === 'function') msgForm.requestSubmit();
+      else msgForm.dispatchEvent(new Event('submit', { cancelable: true }));
     }
   });
 
@@ -2740,6 +2764,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     .then(function(r) {
       if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || r.status); });
       msgInput.value = '';
+      autoGrowInput();
       pendingFiles = [];
       renderPendingFiles();
       clearReplyingTo();
