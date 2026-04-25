@@ -35,7 +35,41 @@ from other users.
        [ -n "$EV" ] && [ "$MV" != "$EV" ] && bash "$SIDECHAT_DIR/install-mcp.sh" --apply >/dev/null 2>&1 || true
      fi
    fi
-   # Mark engaged — visible to other users as "Claude opened this mention"
+   # Race-fix filter (2.6.21): re-query /messages/pending-mentions and
+   # intersect with the watcher's queued ids. Closes the post_reply →
+   # watcher-poll race: post_reply marks a mention read at T server-side,
+   # but stop-poll.sh / poll-mentions.sh may sample at T+ε before that
+   # propagates to /messages/pending-mentions, re-queuing the just-handled
+   # mention. By the time /mention-check runs, propagation has caught up,
+   # so a fresh server query gives the authoritative pending set. Fail-open:
+   # any curl/jq failure leaves the queued files unchanged.
+   if [ -s "$SIDECHAT_DIR/new-mention-ids.txt" ] && command -v jq >/dev/null 2>&1; then
+     # shellcheck disable=SC1090
+     . "$SIDECHAT_DIR/config"
+     PR=$(curl -fsS --max-time 5 -H "Authorization: Bearer ${TOKEN:-}" \
+       "$SERVER_URL/messages/pending-mentions?since_hours=${SIDECHAT_POLL_HOURS:-72}" 2>/dev/null || true)
+     if [ -n "$PR" ]; then
+       SP=$(printf '%s' "$PR" | jq -r '(.messages // [])[].id' 2>/dev/null | sort -u)
+       QU=$(sort -u "$SIDECHAT_DIR/new-mention-ids.txt")
+       if [ -z "$SP" ]; then KEEP=""; else KEEP=$(comm -12 <(printf '%s\n' "$SP") <(printf '%s\n' "$QU")); fi
+       QC=$(printf '%s' "$QU" | grep -c . || true)
+       KC=$(printf '%s' "$KEEP" | grep -c . || true)
+       if [ "${KC:-0}" -eq 0 ] && [ "${QC:-0}" -gt 0 ]; then
+         echo "All $QC queued mention(s) already handled server-side; clearing local queue."
+         rm -f "$SIDECHAT_DIR/new-mentions.txt" "$SIDECHAT_DIR/new-mention-ids.txt"
+       elif [ "${KC:-0}" -lt "${QC:-0}" ]; then
+         KL=$(printf '%s\n' "$KEEP" | jq -R 'tonumber' | jq -s .)
+         printf '%s' "$PR" | jq -r --argjson keep "$KL" '
+           .messages[] | select(.id as $i | $keep | index($i)) |
+           "[\(.timestamp | sub("T"; " ") | sub("\\..*Z$"; ""))] \(.sender): \(.content)"
+         ' > "$SIDECHAT_DIR/new-mentions.txt"
+         printf '%s\n' "$KEEP" > "$SIDECHAT_DIR/new-mention-ids.txt"
+         echo "Filtered $((QC - KC)) stale mention(s) from queue ($KC remaining)."
+       fi
+     fi
+   fi
+   # Mark engaged — visible to other users as "Claude opened this mention".
+   # sc-receipt.sh exits 0 cleanly if the ids file was just removed by the filter.
    "$SIDECHAT_DIR/sc-receipt.sh" engaged
    ```
    From here on, use `$SIDECHAT_DIR/...` for sidechat files — never bare
