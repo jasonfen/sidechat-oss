@@ -9,13 +9,18 @@ from other users.
    Bash tool call — separate blocks leaked `SIDECHAT_DIR` in 2.6.6; fenbot
    caught this on canary 2026-04-22). Claude Code may be launched from any
    CWD (especially when woken by a plugin monitor, not a shell script); the
-   inline resolver below handles `$SIDECHAT_DIR` env override, repo-local
-   `$PWD/.sidechat`, and home-dir `$HOME/.sidechat` in that order.
+   inline resolver below accepts a `$SIDECHAT_DIR` env override or
+   `$PWD/.sidechat`. The pre-2.6.22 `$HOME/.sidechat` fallback is gone
+   because multi-session = multi-install: each CC session owns its own
+   `.sidechat` rooted at its working directory, and a missing per-session
+   install should fail closed rather than silently grabbing another bot's
+   home install and posting under the wrong identity (ansi tripped this
+   on 2026-04-26 from a stale partial dir at `~/ansi/.sidechat/`).
    ```bash
-   for d in "${SIDECHAT_DIR:-}" "$PWD/.sidechat" "$HOME/.sidechat"; do
-     [ -n "$d" ] && [ -f "$d/config" ] && { export SIDECHAT_DIR="$d"; break; }
+   for d in "${SIDECHAT_DIR:-}" "$PWD/.sidechat"; do
+     [ -n "$d" ] && [ -f "$d/config" ] && [ -x "$d/sc-receipt.sh" ] && { export SIDECHAT_DIR="$d"; break; }
    done
-   [ -z "${SIDECHAT_DIR:-}" ] && { echo "No sidechat config found; skipping /mention-check"; exit 0; }
+   [ -z "${SIDECHAT_DIR:-}" ] && { echo "No complete sidechat install (config + sc-receipt.sh) at \$SIDECHAT_DIR or \$PWD/.sidechat; skipping /mention-check"; exit 0; }
    # Self-heal if server has rolled a new version. Empty local version is
    # treated as "outdated" — triggers first-boot auto-update rather than the
    # silent no-op that kept canary pinned pre-2.6.7 (fenbot 2026-04-22).

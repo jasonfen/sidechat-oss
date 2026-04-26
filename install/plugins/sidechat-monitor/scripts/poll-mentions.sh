@@ -17,8 +17,11 @@
 #
 # Config resolution (first match wins):
 #   1. $SIDECHAT_DIR         — explicit plugin-side override
-#   2. $PWD/.sidechat        — repo-local install (most bots)
-#   3. $HOME/.sidechat       — home install (install-server.sh default)
+#   2. $PWD/.sidechat        — repo-local install
+#
+# 2.6.22 dropped the $HOME/.sidechat fallback so multi-session bots can't
+# silently grab a sibling's install. See resolve-sidechat-dir.sh for the
+# rationale.
 #
 # Required in config: SERVER_URL, TOKEN.
 
@@ -27,16 +30,16 @@ set -euo pipefail
 # Config resolution is shared with /mention-check via resolve-sidechat-dir.sh —
 # single source of truth means plugin and slash command agree on which install
 # they're talking to regardless of where Claude Code was launched from.
-# Try the resolver from likely install dirs ($PWD-relative, then $HOME); exit
-# 0 if nothing found (background monitor — keep plugin registration intact,
-# next restart resolves once config exists).
-for _resolver in "$PWD/.sidechat/resolve-sidechat-dir.sh" "$HOME/.sidechat/resolve-sidechat-dir.sh"; do
-  if [[ -x "$_resolver" ]]; then
-    eval "$("$_resolver" 2>/dev/null)" && break || true
-  fi
-done
+# Try the resolver from $PWD/.sidechat. Pre-2.6.22 also probed $HOME but
+# that path is gone — see resolve-sidechat-dir.sh. Exit 0 if nothing found
+# (background monitor — keep plugin registration intact, next restart
+# resolves once a complete install exists at $PWD/.sidechat).
+_resolver="$PWD/.sidechat/resolve-sidechat-dir.sh"
+if [[ -x "$_resolver" ]]; then
+  eval "$("$_resolver" 2>/dev/null)" || true
+fi
 if [[ -z "${SIDECHAT_DIR:-}" ]]; then
-  echo "sidechat-monitor: no .sidechat/config found in \$PWD or \$HOME; set SIDECHAT_DIR env to override" >&2
+  echo "sidechat-monitor: no complete install at \$PWD/.sidechat; set SIDECHAT_DIR env to override" >&2
   exit 0
 fi
 

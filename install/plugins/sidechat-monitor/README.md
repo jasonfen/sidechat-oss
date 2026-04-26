@@ -47,10 +47,13 @@ read receipts).
 ## Prereqs
 
 - CC ≥ 2.1.105 for the `monitors` manifest key.
-- A functional sidechat install with `.sidechat/config` (SERVER_URL +
-  TOKEN). Either repo-local (`$PWD/.sidechat`) or home-dir
-  (`$HOME/.sidechat`) — the plugin resolves automatically. Set
-  `SIDECHAT_DIR` env to override.
+- A complete sidechat install at `$PWD/.sidechat` (must contain both
+  `config` with SERVER_URL + TOKEN, and `sc-receipt.sh`). The plugin
+  resolves automatically from the working directory; set `SIDECHAT_DIR`
+  env to point elsewhere. Pre-2.6.22 also probed `$HOME/.sidechat`, but
+  that fallback is gone — multi-session bots get a per-session install
+  rooted at their cwd, so a missing local install must fail closed
+  rather than silently grab a sibling's home install.
 - `jq` + `curl` on `$PATH`.
 
 ## Install
@@ -87,7 +90,7 @@ sessionstart-poll.sh hook patterns.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `SIDECHAT_DIR` | auto: `$PWD/.sidechat` → `$HOME/.sidechat` | Path to the sidechat config + mention-files directory |
+| `SIDECHAT_DIR` | auto: `$PWD/.sidechat` (validated: config + sc-receipt.sh) | Path to the sidechat config + mention-files directory |
 | `SIDECHAT_POLL_INTERVAL_SEC` | 5 | Seconds between pending-mentions polls |
 | `SIDECHAT_POLL_HOURS` | 72 | Lookback window for pending-mentions query (matches hook-poll convention) |
 
