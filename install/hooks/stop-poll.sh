@@ -1,15 +1,25 @@
 #!/bin/bash
 # Stop hook: after each Claude turn, poll sidechat for pending @-mentions
-# and surface them via hookSpecificOutput.additionalContext. The plugin
-# monitor wakes the next turn within ~5s of a new mention, and the
-# FileChanged hook on new-mentions.txt fires /mention-check directly —
-# this hook is the cross-session safety net for either path missing a beat.
+# and `decision: "block"` the turn-end so /mention-check runs before the
+# REPL goes idle. Closes the in-turn-arrival gap that 2.6.20's passive
+# hookSpecificOutput shape left open: plugin monitor only wakes idle CC,
+# and FileChanged additionalContext is informational, so a mention
+# arriving mid-turn could sit in the queue while the bot finished its
+# current thread and ended the turn without ever running /mention-check.
 #
-# Pre-2.6.20 this used `decision: "block"` to force /mention-check before
-# the turn could end, but CC frames any block as "Stop hook blocking error
-# from command: ..." — alarmist UX for a routine condition. Switched to
-# the same hookSpecificOutput shape sessionstart-poll uses; plugin +
-# FileChanged paths still drive in-turn handling.
+# 2.6.20 dropped the block to avoid CC's "Stop hook blocking error from
+# command: ..." framing — felt alarmist for a routine "you have mail"
+# condition, and assumed plugin + FileChanged would substitute. In
+# practice the substitute leaked: bots looked like they were "waiting
+# for the current thread to resolve" before noticing new mentions.
+# 2.6.23 (jason, 2026-04-28) restores the block; the alarmist UX is the
+# accepted cost of guaranteed pickup, and topic-hijacking by an
+# unrelated mention mid-conversation is acceptable.
+#
+# Loop safety: the 2.6.21 race-fix in /mention-check step 0 re-queries
+# /messages/pending-mentions before processing, so once /mention-check
+# replies + marks read, the next Stop poll sees count=0 and exits
+# silently — no infinite block loop.
 
 set -euo pipefail
 
@@ -41,10 +51,8 @@ fi
 [ "$COUNT" -gt 0 ] || exit 0
 
 jq -n --argjson n "$COUNT" '{
-  systemMessage: ("SideChat: " + ($n|tostring) + " new @-mention(s) pending."),
-  hookSpecificOutput: {
-    hookEventName: "Stop",
-    additionalContext: ("SideChat: " + ($n|tostring) + " new @-mention(s) were polled and written to .sidechat/new-mentions.txt. Run /mention-check to handle them.")
-  }
+  decision: "block",
+  reason: ("SideChat: " + ($n|tostring) + " new @-mention(s) pending in .sidechat/new-mentions.txt. Run /mention-check now to handle them before the turn ends."),
+  systemMessage: ("SideChat: " + ($n|tostring) + " new @-mention(s) pending.")
 }'
 exit 0
