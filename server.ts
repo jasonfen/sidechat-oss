@@ -750,7 +750,7 @@ process.on("SIGINT", () => process.exit(0));
 
 // --- Web Frontend ---
 
-function buildChatPage(username: string, canPost: boolean, sessionToken: string, nonce: string): string {
+function buildChatPage(username: string, canPost: boolean, sessionToken: string, nonce: string, isAdmin: boolean = false): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -789,6 +789,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   #sidebar.collapsed #sidebar-label { display: none; }
   #signout-btn { background: none; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 4px 12px; font-family: inherit; font-size: 12px; cursor: pointer; }
   #signout-btn:hover { border-color: #8b949e; }
+  #admin-console-link { font-size: 12px; color: #8b949e; text-decoration: none; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 8px; border: 1px solid #30363d; border-radius: 6px; }
+  #admin-console-link:hover { color: #58a6ff; border-color: #8b949e; }
   #sidebar-header {
     padding: 0 14px;
     height: 45px;
@@ -1682,6 +1684,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           <span id="bell-icon">&#x1F514;</span>
           <span id="bell-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#f85149;color:#fff;border-radius:50%;font-size:11px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;font-weight:700;"></span>
         </div>
+        ${isAdmin ? '<a id="admin-console-link" href="/admin" title="Admin Console">Admin &rarr;</a>' : ''}
         <button id="signout-btn">Sign Out</button>
       </div>
     </div>
@@ -3194,7 +3197,7 @@ app.post("/watch/logout", requireObserver, async (c) => {
 app.get("/", requireObserver, (c) => {
   const obs = c.get("observer") as any;
   const token = getCookie(c, "observer_session")!;
-  return c.html(buildChatPage(obs.username, !!obs.can_post, token, c.get("cspNonce") as string));
+  return c.html(buildChatPage(obs.username, !!obs.can_post, token, c.get("cspNonce") as string, obs.role === "admin"));
 });
 
 // GET /metrics — Prometheus exposition format.
@@ -3703,7 +3706,7 @@ async function requireObserver(c: Context, next: Next) {
   if (!token) return c.redirect("/watch/login");
 
   const session = db.query(
-    `SELECT os.*, o.username, o.status, o.can_post
+    `SELECT os.*, o.username, o.status, o.can_post, o.role
      FROM observer_sessions os
      JOIN observers o ON o.id = os.observer_id
      WHERE os.token = ?`
