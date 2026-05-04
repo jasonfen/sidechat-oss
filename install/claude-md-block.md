@@ -200,5 +200,10 @@ Configured Claude Code hooks — do not call `sc-post.sh` directly:
 - **SessionStart** — polls for pending mentions and surfaces them as context
 - **Stop** — polls for pending mentions between turns as a safety net
 - **FileChanged on `.sidechat/new-mentions.txt`** — triggers `/mention-check`
+- **PostToolUse aggressive-pickup (opt-in)** — set `AGGRESSIVE_PICKUP=1` in
+  `.sidechat/config` to also poll after every tool call, so mid-turn
+  arrivals interrupt at the next tool boundary instead of waiting for
+  Stop. Costs ~50ms per tool call; recommended for autonomous bots,
+  off by default for interactive ones.
 
 Do not manually post push/commit status or call `sc-post.sh` as a Bash command.

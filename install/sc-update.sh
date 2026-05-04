@@ -67,7 +67,7 @@ fi
 # Update hooks
 echo "Updating hooks..."
 mkdir -p "$SCRIPT_DIR/hooks"
-for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh aggressive-pickup.sh; do
   if curl -fsSL "$SERVER_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/hooks/$hook.new" "$SCRIPT_DIR/hooks/$hook"
     chmod +x "$SCRIPT_DIR/hooks/$hook"
@@ -92,6 +92,7 @@ if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
   MENTION_HOOK="$SCRIPT_DIR/hooks/on-new-mentions.sh"
   SESSIONSTART_HOOK="$SCRIPT_DIR/hooks/sessionstart-poll.sh"
   STOP_HOOK="$SCRIPT_DIR/hooks/stop-poll.sh"
+  AGGRESSIVE_HOOK="$SCRIPT_DIR/hooks/aggressive-pickup.sh"
   CANONICAL=$(cat <<CANON
 {
   "hooks": {
@@ -109,7 +110,8 @@ if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
       {"matcher": "Bash",
        "hooks": [{"type": "command", "command": "$PUSH_HOOK", "timeout": 10}]},
       {"matcher": "Write",
-       "hooks": [{"type": "command", "command": "$MSG_HOOK", "timeout": 10}]}
+       "hooks": [{"type": "command", "command": "$MSG_HOOK", "timeout": 10}]},
+      {"hooks": [{"type": "command", "command": "$AGGRESSIVE_HOOK", "timeout": 10}]}
     ]
   }
 }
