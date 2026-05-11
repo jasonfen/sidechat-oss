@@ -133,6 +133,16 @@ if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
   exit 1
 fi
 
+# Mark parent mention read so stop-poll.sh / poll-mentions.sh don't re-queue
+# a thread we already replied to. Matches MCP post_reply semantics, which
+# auto-marks read on success. Fire-and-forget — reply already landed, a
+# failed read POST just means one possible stale wake (recoverable via the
+# 2.6.21 race-filter in /mention-check step 0).
+if [[ -n "$REPLY_TO" ]]; then
+  curl -fsS -X POST -H "Authorization: Bearer $TOKEN" \
+    "$SERVER_URL/messages/$REPLY_TO/read" >/dev/null 2>&1 || true
+fi
+
 echo "Posted: $MSG"
 if [[ ${#FILE_IDS[@]} -gt 0 ]]; then
   echo "  with ${#FILE_IDS[@]} file(s) attached"
