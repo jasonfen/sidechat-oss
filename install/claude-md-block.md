@@ -146,21 +146,40 @@ sidechat timestamps as-is only when referencing specific messages.
 The `sidechat-monitor` plugin (installed via the sidechat-oss marketplace —
 see "Staying up to date" below) runs a background `poll-mentions.sh`
 subprocess under Claude Code. It polls `/messages/pending-mentions` every 5s
-and emits a wake line on new arrivals, which spawns a new CC turn from an
-idle REPL. The `SessionStart` and `Stop` hooks provide backup polling at
-session boundaries, and the `FileChanged` hook on `.sidechat/new-mentions.txt`
-fires `/mention-check` whenever the monitor writes new entries.
+and on each new arrival does **two** things: emits a stdout wake-line (the
+CC harness reads it and spawns a turn from an idle REPL on CC versions
+where stdout-wake works — H1 on 2.1.116/2.1.117), and `tmux send-keys`
+injects `/mention-check` into the current tmux session as the load-bearing
+fallback (added in 2.6.27). The send-keys path absorbs the role the
+retired `sc-webhook-server.py` used to play — no separate per-bot
+`sidechat-webhook.service` is required for idle-REPL wake.
+
+Session-name resolution for the tmux inject: `$SIDECHAT_TMUX_SESSION` env
+override → `$TMUX` env (inherited from CC's pane) + `tmux display-message
+-p '#S'` for the live session. If neither tmux is on PATH nor `$TMUX` is
+set (i.e., CC launched outside tmux), the inject silently skips and only
+stdout-wake fires. Both layers are idempotent — duplicate `/mention-check`
+turns hit the step-0 race filter and exit silently.
+
+Backup polling: `SessionStart` and `Stop` hooks cover session boundaries.
+The `FileChanged` hook on `.sidechat/new-mentions.txt` fires
+`/mention-check` whenever the monitor writes new entries. Bots that opt in
+to `AGGRESSIVE_PICKUP=1` in `.sidechat/config` also pick up mid-turn at
+every tool-call boundary via the PostToolUse `aggressive-pickup.sh` hook.
 
 The `/mention-check` flow reads `.sidechat/new-mentions.txt`, classifies
 each line, replies (MCP or fallback) for read-only responses, and queues
 action proposals in `.sidechat/pending-actions.txt` for user approval.
 
 No `/start` bootstrap is needed — the plugin monitor activates on CC
-session startup. Legacy `sc-webhook-server.py` + `tmux send-keys` wake
-path and the `sc-listen.sh` / `sc-notify.sh` userspace pollers are
-retired; their scripts may still exist on disk from older installs but
-nothing references them. Bots with `--plugin-dir` launcher patches
-predate the marketplace install and can drop the flag after a rebuild.
+session startup. Legacy `sc-listen.sh` / `sc-notify.sh` userspace pollers
+are retired; their scripts may still exist on disk from older installs
+but nothing references them. The standalone `sc-webhook-server.py` +
+`sidechat-webhook.service` are also retired now that the plugin monitor
+owns tmux-inject directly; server-side `deliverWebhooks` and the script
+stay in the tree for non-CC clients. Bots with `--plugin-dir` launcher
+patches predate the marketplace install and can drop the flag after a
+rebuild.
 
 ### Polling
 

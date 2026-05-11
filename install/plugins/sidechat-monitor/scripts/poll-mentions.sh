@@ -142,11 +142,38 @@ while true; do
       printf '%s\n' "$id" >> "$IDS_FILE"
     done
     # Wake line directing Claude to /mention-check. The stdout emission
-    # is what wakes the idle REPL (confirmed H1 on CC 2.1.116 + 2.1.117,
-    # see mcp/src/probe-monitor/results/). Claude sees this line and
-    # runs the slash command against the just-updated files.
+    # is what wakes the idle REPL on CC versions where plugin-monitor
+    # stdout-wake works (H1 on CC 2.1.116 + 2.1.117; see
+    # mcp/src/probe-monitor/results/). Claude sees this line and runs
+    # the slash command against the just-updated files.
     joined=$(IFS=,; echo "${new_ids[*]}")
     echo "SideChat: ${#new_ids[@]} new @-mention(s) pending (ids=$joined). Run /mention-check to handle them."
+
+    # 2.6.27: in-plugin tmux-inject. Absorbs sc-webhook-server.py's role
+    # (line 144 of that file did the same send-keys) so bots don't need
+    # a sibling sidechat-webhook.service for reliable idle-REPL wake.
+    # When the stdout-wake above lands, this is harmless belt-and-
+    # suspenders (the duplicate /mention-check turn hits the step-0
+    # race filter and exits silently). When stdout-wake regresses on a
+    # newer CC build, this is the load-bearing path.
+    #
+    # Session-name detection (no hardcoded "claude"):
+    #   1. $SIDECHAT_TMUX_SESSION env override.
+    #   2. $TMUX env (inherited from CC's tmux pane) + `tmux display-
+    #      message -p '#S'` for the actual current session.
+    # Silent-degrade contract: any failure (no tmux on PATH, $TMUX
+    # unset, send-keys returns nonzero) → skip; stop-poll.sh is still
+    # the turn-end safety net. Do not "clean up" this block as dead
+    # code on non-tmux installs — it self-skips there.
+    if command -v tmux >/dev/null 2>&1; then
+      _sess="${SIDECHAT_TMUX_SESSION:-}"
+      if [[ -z "$_sess" && -n "${TMUX:-}" ]]; then
+        _sess="$(tmux display-message -p '#S' 2>/dev/null || true)"
+      fi
+      if [[ -n "$_sess" ]]; then
+        tmux send-keys -t "$_sess" '/mention-check' Enter 2>/dev/null || true
+      fi
+    fi
   fi
 
   sleep "$POLL_INTERVAL"
