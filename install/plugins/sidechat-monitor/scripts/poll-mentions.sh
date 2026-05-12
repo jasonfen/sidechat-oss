@@ -102,9 +102,23 @@ while true; do
   # of silent miss on next rotation.
   # shellcheck disable=SC1090
   source "$CONFIG" 2>/dev/null || true
-  body=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+  # 0.1.3: replace `curl -sf … || echo '{}'` with a -w-coded fetch so 4xx
+  # responses surface to stderr instead of silently degrading to an empty
+  # body. Pre-0.1.3 a stale TOKEN returned 401, the silenced body fell
+  # through to '{}', and the loop walked empty forever with no log line.
+  # Only 4xx complains (auth/permission — operator-actionable); 5xx and
+  # network errors stay quiet because they're transient and self-healing.
+  response=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" \
     "$SERVER_URL/messages/pending-mentions?since_hours=${POLL_LOOKBACK_HOURS}" \
-    2>/dev/null || echo '{}')
+    2>/dev/null)
+  http_code=$(printf '%s' "$response" | tail -n1)
+  body=$(printf '%s' "$response" | sed '$d')
+  if [[ "$http_code" =~ ^4 ]]; then
+    echo "sidechat-monitor: pending-mentions GET → HTTP $http_code (TOKEN stale? config rotated mid-run? re-source picks up the next-rotated value automatically)" >&2
+  fi
+  if [[ "$http_code" != "200" ]]; then
+    body='{}'
+  fi
 
   # Extract new mentions (id + formatted line), dedup against the
   # on-disk IDS_FILE. Format lines the same way the webhook listener
