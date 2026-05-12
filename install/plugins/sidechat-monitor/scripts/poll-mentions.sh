@@ -93,6 +93,15 @@ download_attachment() {
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
 while true; do
+  # 0.1.2: re-source config each iteration so TOKEN rotations (via
+  # sc-auth.sh or sc-update.sh re-auth) propagate within one poll
+  # interval. Pre-0.1.2 we sourced once at startup (line 48), which
+  # silently broke after every credential rotation until the watcher
+  # was killed and respawned. Fenbot caught this 2026-05-12 with the
+  # 24h-stale token. Cheap (~50µs reading a small file) vs. minutes
+  # of silent miss on next rotation.
+  # shellcheck disable=SC1090
+  source "$CONFIG" 2>/dev/null || true
   body=$(curl -sf -H "Authorization: Bearer $TOKEN" \
     "$SERVER_URL/messages/pending-mentions?since_hours=${POLL_LOOKBACK_HOURS}" \
     2>/dev/null || echo '{}')
