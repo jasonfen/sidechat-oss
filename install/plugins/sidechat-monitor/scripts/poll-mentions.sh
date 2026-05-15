@@ -107,10 +107,21 @@ download_attachment() {
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
-PLUGIN_VERSION="0.1.4"
+PLUGIN_VERSION="0.1.5"
 LAST_INJECT_MS=""
 
-now_ms() { date +%s%3N; }
+# Epoch milliseconds. `date +%N` is a GNU coreutils extension; BSD `date`
+# (macOS — pookiebot/macbotm5) doesn't support it and emits a non-integer
+# like `1778846376%3N`, which made send_heartbeat's jq --argjson fail and
+# the heartbeat 400 silently (0.1.4 bug: Mac bots never went green on
+# /admin/bot-health). Detect %N support once; fall back to seconds×1000
+# (ms precision is irrelevant for a 5s-polled "Ns ago" badge).
+# GNU date: `date +%N` → all-digits (nanoseconds). BSD date: literal "N".
+if date +%N 2>/dev/null | grep -qE '^[0-9]+$'; then
+  now_ms() { date +%s%3N; }
+else
+  now_ms() { echo $(( $(date +%s) * 1000 )); }
+fi
 
 # 0.1.4 (sidechat 2.6.31): post liveness to /bots/heartbeat each iteration.
 # Server upserts a single per-bot row so /admin/bot-health can render
