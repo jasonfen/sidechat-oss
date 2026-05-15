@@ -4251,6 +4251,7 @@ app.get("/admin", requireAdmin, (c) => {
 <div id="header">
   <h1>SideChat Admin <span class="version" title="build ${SERVER_SHA}">v${SERVER_VERSION}</span></h1>
   <div class="nav">
+    <a href="/admin/bot-health">Bot Health</a>
     <a href="/">Chat</a>
     <button class="btn-logout">Logout</button>
   </div>
@@ -4639,7 +4640,7 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
   <p class="footnote">Last poll &lt; 30 s = healthy (green); &lt; 5 min = warn; &gt; 5 min or no heartbeat at all = stale (red).
   "Last inject" is null on non-tmux installs &mdash; stdout-wake is the load-bearing path there.</p>
 </div>
-<script>
+<script nonce="${c.get("cspNonce")}">
   const DATA = ${payload};
   const TBODY = document.getElementById('rows');
   function fmtAgo(ms, nowMs) {
