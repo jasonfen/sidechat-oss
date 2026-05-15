@@ -53,6 +53,21 @@ source "$CONFIG"
 POLL_INTERVAL="${SIDECHAT_POLL_INTERVAL_SEC:-5}"
 POLL_LOOKBACK_HOURS="${SIDECHAT_POLL_HOURS:-72}"
 
+# 2.6.31: log silent-skip paths once per reason per process. Without this,
+# a permanently-broken inject (no tmux on PATH, $TMUX never set, etc.)
+# leaves the operator wondering why mid-turn wake never fires. With dedup,
+# the reason surfaces once at the first skip and stays out of the way
+# afterwards. The 4xx logging on the pending-mentions GET (above) stays
+# per-poll because it's typically transient — token rotation cures it.
+declare -A _logged_once
+log_skip_once() {
+  local key="$1" msg="$2"
+  if [[ -z "${_logged_once[$key]:-}" ]]; then
+    echo "sidechat-monitor: $msg" >&2
+    _logged_once[$key]=1
+  fi
+}
+
 MENTIONS_FILE="$SIDECHAT_DIR/new-mentions.txt"
 IDS_FILE="$SIDECHAT_DIR/new-mention-ids.txt"
 FILES_DIR="$SIDECHAT_DIR/files"
@@ -91,6 +106,32 @@ download_attachment() {
 #      baseline. No stale-state leaks.
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
+
+PLUGIN_VERSION="0.1.4"
+LAST_INJECT_MS=""
+
+now_ms() { date +%s%3N; }
+
+# 0.1.4 (sidechat 2.6.31): post liveness to /bots/heartbeat each iteration.
+# Server upserts a single per-bot row so /admin/bot-health can render
+# last-poll-ago / last-inject-ago / queue-size. Best-effort: silent on
+# transport errors (the poll loop itself is the canonical heartbeat —
+# if the server is unreachable the operator sees that by other means).
+send_heartbeat() {
+  local poll_ms="$1" queue_size="$2"
+  local body
+  body=$(jq -nc \
+    --argjson p "$poll_ms" \
+    --argjson q "$queue_size" \
+    --arg v "$PLUGIN_VERSION" \
+    --arg i "${LAST_INJECT_MS:-}" \
+    '{last_poll_ms:$p, queue_size:$q, plugin_version:$v} + (if $i == "" then {} else {last_inject_ms: ($i|tonumber)} end)')
+  curl -sf --max-time 3 -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$body" \
+    "$SERVER_URL/bots/heartbeat" >/dev/null 2>&1 || true
+}
 
 while true; do
   # 0.1.2: re-source config each iteration so TOKEN rotations (via
@@ -194,10 +235,23 @@ while true; do
         _sess="$(tmux display-message -p '#S' 2>/dev/null || true)"
       fi
       if [[ -n "$_sess" ]]; then
-        tmux send-keys -t "$_sess" '/mention-check' Enter 2>/dev/null || true
+        if tmux send-keys -t "$_sess" '/mention-check' Enter 2>/dev/null; then
+          LAST_INJECT_MS="$(now_ms)"
+        else
+          log_skip_once "tmux-sendkeys" "tmux send-keys failed against session '$_sess' — pane may be detached; stdout-wake is now load-bearing"
+        fi
+      else
+        log_skip_once "tmux-nosess" "tmux inject skipped — no session resolvable (\$SIDECHAT_TMUX_SESSION and \$TMUX both empty); stdout-wake is now load-bearing"
       fi
+    else
+      log_skip_once "tmux-missing" "tmux inject skipped — 'tmux' not on PATH; stdout-wake is now load-bearing"
     fi
   fi
+
+  # Liveness heartbeat — fire after the poll work, so queue_size reflects
+  # post-poll state and last_inject_ms covers any inject we just did.
+  queue_size=$(wc -l < "$IDS_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+  send_heartbeat "$(now_ms)" "${queue_size:-0}"
 
   sleep "$POLL_INTERVAL"
 done

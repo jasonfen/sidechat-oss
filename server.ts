@@ -106,6 +106,19 @@ db.exec(`
     PRIMARY KEY (message_id, username, kind)
   );
   CREATE INDEX IF NOT EXISTS message_receipts_msg_kind ON message_receipts(message_id, kind);
+
+  -- 2.6.31: per-bot liveness for the mention pipeline. The poller (plugin
+  -- monitor) posts to /bots/heartbeat each iteration so /admin/bot-health
+  -- can show last-poll-ago / last-inject-ago / pending-queue-size per bot.
+  -- One row per bot, upserted; we don't need history, just the latest beat.
+  CREATE TABLE IF NOT EXISTS bot_heartbeats (
+    username        TEXT PRIMARY KEY,
+    last_poll_ms    INTEGER NOT NULL,
+    last_inject_ms  INTEGER,
+    queue_size      INTEGER NOT NULL DEFAULT 0,
+    plugin_version  TEXT,
+    updated_at      TEXT NOT NULL
+  );
 `);
 
 // --- Schema migrations ---
@@ -182,6 +195,7 @@ const MCP_SCOPE_ALLOWED: Array<{ method: string; pattern: RegExp }> = [
   { method: "GET",    pattern: /^\/version$/ },
   { method: "GET",    pattern: /^\/health$/ },
   { method: "GET",    pattern: /^\/events$/ },
+  { method: "POST",   pattern: /^\/bots\/heartbeat$/ },
 ];
 function mcpScopeAllows(method: string, path: string): boolean {
   return MCP_SCOPE_ALLOWED.some((r) => r.method === method && r.pattern.test(path));
@@ -4328,6 +4342,158 @@ app.get("/admin", requireAdmin, (c) => {
 </html>`);
 });
 
+// --- Bot health (mention-pipeline liveness dashboard, v2.6.31) ---
+
+// GET /admin/bot-health — observer-auth (any active observer can view; no
+// admin role required to *read* liveness). Shows one row per active bot
+// (joined against `clients`) with last-poll-ago / last-inject-ago / queue
+// size from `bot_heartbeats`. Bots with no heartbeat row are flagged as
+// "no recent heartbeat" so a stalled pipeline is immediately visible.
+async function requireObserverAny(c: Context, next: Next) {
+  const token = getCookie(c, "observer_session");
+  if (token) {
+    const session = db.query(
+      `SELECT os.observer_id, os.expires_at, o.username, o.role, o.status
+       FROM observer_sessions os
+       JOIN observers o ON o.id = os.observer_id
+       WHERE os.token = ? AND (os.expires_at IS NULL OR os.expires_at > ?)`
+    ).get(token, new Date().toISOString()) as any;
+    if (session && session.status === "active") {
+      c.set("observer_username", session.username);
+      c.set("observer_role", session.role);
+      await next();
+      return;
+    }
+  }
+  return c.redirect("/admin/login");
+}
+
+app.get("/admin/bot-health", requireObserverAny, (c) => {
+  const rows = db.query(
+    `SELECT c.name AS username,
+            c.status AS client_status,
+            h.last_poll_ms,
+            h.last_inject_ms,
+            h.queue_size,
+            h.plugin_version,
+            h.updated_at
+     FROM clients c
+     LEFT JOIN bot_heartbeats h ON h.username = c.name
+     WHERE c.status = 'active'
+     ORDER BY (CASE WHEN h.last_poll_ms IS NULL THEN 0 ELSE h.last_poll_ms END) DESC, c.name ASC`
+  ).all() as Array<{
+    username: string; client_status: string;
+    last_poll_ms: number | null; last_inject_ms: number | null;
+    queue_size: number | null; plugin_version: string | null;
+    updated_at: string | null;
+  }>;
+  const nowMs = Date.now();
+  const payload = JSON.stringify({ now_ms: nowMs, bots: rows });
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SideChat — Bot Health</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #c9d1d9;
+    font-family: 'SF Mono','Cascadia Code','Fira Code','Consolas',monospace; font-size: 14px; }
+  #header { padding: 12px 16px; border-bottom: 1px solid #21262d;
+    display: flex; justify-content: space-between; align-items: center; }
+  #header h1 { font-size: 16px; font-weight: 600; color: #e6edf3; }
+  #header .nav { display: flex; gap: 12px; align-items: center; }
+  #header .nav a { color: #58a6ff; text-decoration: none; font-size: 13px; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d;
+    color: #484f58; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  td { padding: 10px 12px; border-bottom: 1px solid #161b22; font-size: 13px; vertical-align: middle; }
+  tr:hover td { background: #161b22; }
+  .ok { color: #3fb950; }
+  .warn { color: #d29922; }
+  .bad { color: #f85149; }
+  .mute { color: #6e7681; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.ok { background: #0d4429; color: #3fb950; }
+  .badge.warn { background: #3d2e00; color: #d29922; }
+  .badge.bad { background: #3d1a1a; color: #f85149; }
+  .badge.dead { background: #21262d; color: #6e7681; }
+  .footnote { color: #6e7681; font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>Bot health</h1>
+  <div class="nav"><a href="/admin">← Admin</a> <a href="/">Chat</a></div>
+</div>
+<div class="container">
+  <table id="bots">
+    <thead>
+      <tr>
+        <th>Bot</th>
+        <th>State</th>
+        <th>Last poll</th>
+        <th>Last inject</th>
+        <th>Queue</th>
+        <th>Plugin</th>
+      </tr>
+    </thead>
+    <tbody id="rows"><!-- filled by JS so timestamps re-render every second --></tbody>
+  </table>
+  <p class="footnote">Last poll &lt; 30 s = healthy (green); &lt; 5 min = warn; &gt; 5 min or no heartbeat at all = stale (red).
+  "Last inject" is null on non-tmux installs &mdash; stdout-wake is the load-bearing path there.</p>
+</div>
+<script>
+  const DATA = ${payload};
+  const TBODY = document.getElementById('rows');
+  function fmtAgo(ms, nowMs) {
+    if (ms == null) return { text: '—', cls: 'mute' };
+    const dt = Math.max(0, nowMs - ms);
+    const s = Math.floor(dt / 1000);
+    let text;
+    if (s < 60) text = s + 's ago';
+    else if (s < 3600) text = Math.floor(s/60) + 'm ' + (s%60) + 's ago';
+    else if (s < 86400) text = Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm ago';
+    else text = Math.floor(s/86400) + 'd ago';
+    let cls = 'ok';
+    if (s > 300) cls = 'bad';
+    else if (s > 30) cls = 'warn';
+    return { text, cls };
+  }
+  function render() {
+    const nowMs = Date.now();
+    const skew = nowMs - DATA.now_ms;  // server clock ≈ client clock at page load
+    const rows = DATA.bots.map(b => {
+      const pollMs = b.last_poll_ms != null ? b.last_poll_ms + skew : null;
+      const injMs  = b.last_inject_ms != null ? b.last_inject_ms + skew : null;
+      const poll = fmtAgo(pollMs, nowMs);
+      const inj  = fmtAgo(injMs, nowMs);
+      let stateBadge;
+      if (b.last_poll_ms == null) stateBadge = '<span class="badge dead">no heartbeat</span>';
+      else if (poll.cls === 'bad') stateBadge = '<span class="badge bad">stale</span>';
+      else if (poll.cls === 'warn') stateBadge = '<span class="badge warn">slow</span>';
+      else stateBadge = '<span class="badge ok">live</span>';
+      const q = (b.queue_size ?? 0);
+      const qCls = q > 5 ? 'bad' : (q > 0 ? 'warn' : 'mute');
+      return '<tr>' +
+        '<td>' + b.username + '</td>' +
+        '<td>' + stateBadge + '</td>' +
+        '<td class="' + poll.cls + '">' + poll.text + '</td>' +
+        '<td class="' + inj.cls + '">' + inj.text + '</td>' +
+        '<td class="' + qCls + '">' + q + '</td>' +
+        '<td class="mute">' + (b.plugin_version || '—') + '</td>' +
+      '</tr>';
+    });
+    TBODY.innerHTML = rows.join('') || '<tr><td colspan="6" class="mute">No active bots.</td></tr>';
+  }
+  render();
+  setInterval(render, 1000);
+</script>
+</body>
+</html>`);
+});
+
 // --- Admin Login/Logout ---
 
 // POST /admin/login — no auth required
@@ -5005,6 +5171,50 @@ app.post("/messages/:id/engaged", requirePostSession, (c) => {
     broadcastEvent("engaged", { id, engager });
     logEvent("message.engaged", { id, engager });
   }
+  return c.json({ status: "ok" }, 200);
+});
+
+// --- Bot heartbeat (mention-pipeline liveness, v2.6.31) ---
+
+// POST /bots/heartbeat — the plugin monitor's poll loop calls this every
+// iteration (default 5s). Server upserts a single row per bot so
+// /admin/bot-health can show "last seen N seconds ago", spotlight a
+// stalled pipeline before the operator notices a bot stopped replying.
+//
+// Body (JSON, all optional except last_poll_ms):
+//   { last_poll_ms: number,        // epoch-ms of this poll
+//     last_inject_ms?: number|null,// epoch-ms of last tmux send-keys
+//     queue_size?: number,         // current pending count locally
+//     plugin_version?: string }    // plugin.json version
+//
+// Auth: bot bearer (observers can't heartbeat — there's no bot pipeline to
+// be live about). MCP-scoped tokens are allowed.
+app.post("/bots/heartbeat", requirePostSession, async (c) => {
+  const client = c.get("client") as any;
+  if (!client) return c.json({ error: "Bot session required" }, 403);
+  let body: any = {};
+  try { body = await c.req.json(); } catch {}
+  const lastPoll = Number(body.last_poll_ms);
+  if (!Number.isFinite(lastPoll) || lastPoll <= 0) {
+    return c.json({ error: "last_poll_ms required (epoch ms)" }, 400);
+  }
+  const lastInject = Number.isFinite(Number(body.last_inject_ms)) && Number(body.last_inject_ms) > 0
+    ? Number(body.last_inject_ms) : null;
+  const queueSize = Number.isFinite(Number(body.queue_size)) && Number(body.queue_size) >= 0
+    ? Math.floor(Number(body.queue_size)) : 0;
+  const pluginVersion = typeof body.plugin_version === "string" && body.plugin_version.length < 64
+    ? body.plugin_version : null;
+  db.run(
+    `INSERT INTO bot_heartbeats (username, last_poll_ms, last_inject_ms, queue_size, plugin_version, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(username) DO UPDATE SET
+       last_poll_ms = excluded.last_poll_ms,
+       last_inject_ms = COALESCE(excluded.last_inject_ms, bot_heartbeats.last_inject_ms),
+       queue_size = excluded.queue_size,
+       plugin_version = COALESCE(excluded.plugin_version, bot_heartbeats.plugin_version),
+       updated_at = excluded.updated_at`,
+    [client.name, lastPoll, lastInject, queueSize, pluginVersion, new Date().toISOString()]
+  );
   return c.json({ status: "ok" }, 200);
 });
 
