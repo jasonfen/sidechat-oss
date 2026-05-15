@@ -107,7 +107,7 @@ download_attachment() {
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
-PLUGIN_VERSION="0.1.5"
+PLUGIN_VERSION="0.1.6"
 LAST_INJECT_MS=""
 
 # Epoch milliseconds. `date +%N` is a GNU coreutils extension; BSD `date`
@@ -137,7 +137,12 @@ send_heartbeat() {
     --arg v "$PLUGIN_VERSION" \
     --arg i "${LAST_INJECT_MS:-}" \
     '{last_poll_ms:$p, queue_size:$q, plugin_version:$v} + (if $i == "" then {} else {last_inject_ms: ($i|tonumber)} end)')
-  curl -sf --max-time 3 -X POST \
+  # 0.1.6: max-time 3 was too tight for relayed/high-latency tailnet paths
+  # (DERP rather than a direct path — pookiebot on macbotm4ddev, a Debian
+  # arm64 VM nested on macbotm5, timed out every heartbeat at 3s while
+  # untimed ops like marketplace download succeeded). 10s lets a relayed
+  # POST complete; caller backgrounds this so the poll cadence stays tight.
+  curl -sf --max-time 10 -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$body" \
@@ -262,7 +267,11 @@ while true; do
   # Liveness heartbeat — fire after the poll work, so queue_size reflects
   # post-poll state and last_inject_ms covers any inject we just did.
   queue_size=$(wc -l < "$IDS_FILE" 2>/dev/null | tr -d ' ' || echo 0)
-  send_heartbeat "$(now_ms)" "${queue_size:-0}"
+  # Backgrounded (0.1.6): liveness is best-effort and must never gate
+  # mention pickup. A slow/relayed heartbeat POST (up to --max-time 10)
+  # would otherwise stall the next poll by that long. Detach so the loop
+  # keeps its cadence; worst case ~2 overlapping curls, which is fine.
+  { send_heartbeat "$(now_ms)" "${queue_size:-0}" & } 2>/dev/null
 
   sleep "$POLL_INTERVAL"
 done
