@@ -1520,6 +1520,38 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   #autocomplete .ac-item.selected {
     background: var(--signal-wash); color: var(--signal);
   }
+  /* ---- YAML viewer / editor / creator ---- */
+  .yaml-status {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    padding: 7px 12px; border-radius: 6px 6px 0 0;
+    border: 1px solid var(--line); border-bottom: none;
+  }
+  .yaml-status.yaml-ok  { color: var(--ok);     background: rgba(70,200,160,.08);  border-color: rgba(70,200,160,.3); }
+  .yaml-status.yaml-bad { color: var(--alert);  background: rgba(255,93,77,.08);   border-color: rgba(255,93,77,.32); text-transform: none; letter-spacing: .3px; }
+  .yaml-status.yaml-na  { color: var(--txt-3); background: var(--ink-2); }
+  pre.yaml-preview-body {
+    margin: 0; padding: 12px 14px; overflow-x: auto;
+    background: var(--ink); border: 1px solid var(--line);
+    border-radius: 0 0 6px 6px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.6;
+    color: var(--txt); white-space: pre; tab-size: 2;
+  }
+  pre.yaml-preview-body .y-k { color: var(--signal); }
+  pre.yaml-preview-body .y-p { color: var(--txt-3); }
+  pre.yaml-preview-body .y-s { color: #8fcf9d; }
+  pre.yaml-preview-body .y-n { color: #d9a35a; }
+  pre.yaml-preview-body .y-b { color: #c98fe0; font-weight: 600; }
+  pre.yaml-preview-body .y-c { color: var(--txt-4); font-style: italic; }
+  pre.yaml-preview-body .y-d { color: var(--txt-3); }
+  pre.yaml-preview-body .y-a { color: #5fb3c9; }
+  /* composer live pane in YAML mode: drop prose padding, let the pre own it */
+  #newfile-preview.nf-yaml { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+  #newfile-preview.nf-yaml pre.yaml-preview-body { flex: 1; border-radius: 0; border: none; }
+  #newfile-preview.nf-yaml .yaml-status { border-radius: 0; border-left: none; border-right: none; border-top: none; }
+  #md-overlay-body.md-overlay-yaml { padding: 0; }
+  #md-overlay-body.md-overlay-yaml .yaml-status { border-radius: 0; border-top: none; border-left: none; border-right: none; position: sticky; top: 0; }
+  #md-overlay-body.md-overlay-yaml pre.yaml-preview-body { border: none; border-radius: 0; min-height: 100%; }
 </style>
 </head>
 <body>
@@ -1601,6 +1633,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
         <option value="text/plain">Plain text (.txt)</option>
         <option value="text/csv">CSV (.csv)</option>
         <option value="application/json">JSON (.json)</option>
+        <option value="text/yaml">YAML (.yaml)</option>
       </select>
     </div>
     <div class="modal-edit">
@@ -1616,6 +1649,7 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
 </div>
 <script src="/static/marked.min.js"></script>
 <script src="/static/dompurify.min.js"></script>
+<script src="/static/js-yaml.min.js"></script>
 <script nonce="${nonce}">
 (function() {
   var SC_USER = '${username}';
@@ -1889,8 +1923,9 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var row = document.createElement('div');
     row.className = 'file-row';
     var isMd = /\.(md|markdown)$/i.test(f.filename);
+    var isYaml = /\.(ya?ml)$/i.test(f.filename);
     var isTxt = /\.(txt|log|csv|text)$/i.test(f.filename);
-    var inline = isMd || isTxt;
+    var inline = isMd || isYaml || isTxt;
     row.title = inline ? f.filename + ' — click to preview' : f.filename + ' — click to download';
     var fn = document.createElement('div');
     fn.className = 'fn';
@@ -1910,6 +1945,8 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     row.addEventListener('click', function() {
       if (isMd) {
         openMdOverlay(f.id, f.filename);
+      } else if (isYaml) {
+        openMdOverlay(f.id, f.filename, 'yaml');
       } else if (isTxt) {
         openMdOverlay(f.id, f.filename, 'txt');
       } else {
@@ -2008,6 +2045,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           body.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
           return;
         }
+        if (mode === 'yaml') {
+          body.classList.add('md-overlay-yaml');
+          body.innerHTML = yamlToHtml(text);
+          return;
+        }
         var html = window.marked ? window.marked.parse(text) : text;
         body.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html, {
           ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))/i
@@ -2048,6 +2090,90 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     var d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  // --- YAML: parse-backed validity + conservative read-only highlighter ---
+  // jsyaml (vendored /static/js-yaml.min.js) is authoritative for validity;
+  // the highlighter is cosmetic only and never gates anything.
+  function yamlInspect(text) {
+    if (typeof window.jsyaml === 'undefined') {
+      return { ok: null, message: 'YAML parser not available.' };
+    }
+    try {
+      var doc = window.jsyaml.load(text);
+      var depth = (function d(v) {
+        if (v && typeof v === 'object') {
+          var ks = Object.keys(v);
+          if (!ks.length) return 1;
+          var m = 0;
+          for (var i = 0; i < ks.length; i++) { var c = d(v[ks[i]]); if (c > m) m = c; }
+          return 1 + m;
+        }
+        return 0;
+      })(doc);
+      var shape;
+      if (doc === null || doc === undefined) shape = 'empty document';
+      else if (Array.isArray(doc)) shape = doc.length + ' item' + (doc.length === 1 ? '' : 's') + ' (sequence)';
+      else if (typeof doc === 'object') {
+        var n = Object.keys(doc).length;
+        shape = n + ' top-level key' + (n === 1 ? '' : 's');
+      } else shape = typeof doc + ' scalar';
+      return { ok: true, message: shape + (depth ? ', depth ' + depth : '') };
+    } catch (e) {
+      var line = (e && e.mark && typeof e.mark.line === 'number') ? (e.mark.line + 1) : null;
+      var reason = (e && (e.reason || e.message)) ? String(e.reason || e.message) : 'parse error';
+      reason = reason.split('\\n')[0];
+      return { ok: false, line: line, message: reason };
+    }
+  }
+  function yamlBanner(text) {
+    var r = yamlInspect(text);
+    if (r.ok === true)
+      return '<div class="yaml-status yaml-ok">\\u25CF VALID \\u2014 ' + escapeHtml(r.message) + '</div>';
+    if (r.ok === false)
+      return '<div class="yaml-status yaml-bad">\\u25CF INVALID' +
+        (r.line ? ' \\u2014 line ' + r.line : '') + ': ' + escapeHtml(r.message) + '</div>';
+    return '<div class="yaml-status yaml-na">' + escapeHtml(r.message) + '</div>';
+  }
+  function yamlHighlightLine(raw) {
+    // Whole-line comment.
+    var m = raw.match(/^(\\s*)(#.*)$/);
+    if (m) return escapeHtml(m[1]) + '<span class="y-c">' + escapeHtml(m[2]) + '</span>';
+    var out = '';
+    var rest = raw;
+    // Leading indent + optional sequence dash.
+    var lead = rest.match(/^(\\s*)((?:-\\s+)+)?/);
+    if (lead) {
+      out += escapeHtml(lead[1] || '');
+      if (lead[2]) out += '<span class="y-d">' + escapeHtml(lead[2]) + '</span>';
+      rest = rest.slice(lead[0].length);
+    }
+    // "key:" (only an unquoted, simple key — keeps the regex conservative).
+    var kv = rest.match(/^([A-Za-z0-9_.\\-\\/ ]+?)(:)(\\s|$)/);
+    if (kv) {
+      out += '<span class="y-k">' + escapeHtml(kv[1]) + '</span>' +
+             '<span class="y-p">:</span>' + escapeHtml(kv[3]);
+      rest = rest.slice(kv[0].length);
+    }
+    // Trailing comment only when the remainder has no quotes (avoids eating
+    // a '#' that lives inside a quoted scalar).
+    var trail = '';
+    if (rest.indexOf('"') === -1 && rest.indexOf("'") === -1) {
+      var tc = rest.match(/(\\s+#.*)$/);
+      if (tc) { trail = '<span class="y-c">' + escapeHtml(tc[1]) + '</span>'; rest = rest.slice(0, rest.length - tc[1].length); }
+    }
+    // Value tokens.
+    var val = escapeHtml(rest)
+      .replace(/(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g, '<span class="y-s">\$1</span>')
+      .replace(/(^|[\\s,\\[{])(-?\\d+(?:\\.\\d+)?)(?=[\\s,\\]}]|$)/g, '\$1<span class="y-n">\$2</span>')
+      .replace(/(^|[\\s,\\[{])(true|false|null|~|yes|no|on|off)(?=[\\s,\\]}]|$)/gi, '\$1<span class="y-b">\$2</span>')
+      .replace(/(^|\\s)((?:&amp;|\\*)[A-Za-z0-9_\\-]+|!!?[A-Za-z0-9_\\-\\/]*)/g, '\$1<span class="y-a">\$2</span>');
+    return out + val + trail;
+  }
+  function yamlToHtml(text) {
+    var lines = String(text).split('\\n');
+    var body = lines.map(yamlHighlightLine).join('\\n');
+    return yamlBanner(text) + '<pre class="yaml-preview-body">' + body + '</pre>';
   }
 
   function formatContent(content) {
@@ -2132,6 +2258,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       .then(function(text) {
         if (mode === 'txt') {
           target.innerHTML = '<pre class="txt-preview-body">' + escapeHtml(text) + '</pre>';
+          return;
+        }
+        if (mode === 'yaml') {
+          target.classList.add('yaml-preview-host');
+          target.innerHTML = yamlToHtml(text);
           return;
         }
         var rendered;
@@ -2263,10 +2394,11 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
           : (f.size / 1048576).toFixed(1) + ' MB';
         var lower = (f.filename || '').toLowerCase();
         var isMd = lower.endsWith('.md') || lower.endsWith('.markdown');
+        var isYaml = /\\.(ya?ml)$/i.test(lower);
         var isTxt = /\\.(txt|log|csv|text)$/i.test(lower);
-        if (isMd || isTxt) {
-          var mode = isMd ? 'md' : 'txt';
-          var icon = isMd ? '&#x1F4DD;' : '&#x1F4C4;';
+        if (isMd || isYaml || isTxt) {
+          var mode = isMd ? 'md' : (isYaml ? 'yaml' : 'txt');
+          var icon = isMd ? '&#x1F4DD;' : (isYaml ? '&#x2699;&#xFE0F;' : '&#x1F4C4;');
           filesHtml += '<details class="md-preview" data-file-id="' + encodeURIComponent(f.id) + '" data-file-size="' + f.size + '" data-mode="' + mode + '">' +
             '<summary>' +
               '<span class="md-preview-label">' + icon + ' ' + escapeHtml(f.filename) + ' <span class="md-preview-size">(' + sizeStr + ')</span></span>' +
@@ -2636,15 +2768,23 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   var newfileClose = document.getElementById('newfile-close');
   var EXT_BY_MIME = {
     'text/markdown': '.md', 'text/plain': '.txt',
-    'text/csv': '.csv', 'application/json': '.json'
+    'text/csv': '.csv', 'application/json': '.json',
+    'text/yaml': '.yaml'
   };
   function nfUpdatePreview() {
-    var isMd = newfileType.value === 'text/markdown';
-    newfilePreview.hidden = !isMd;
+    var t = newfileType.value;
+    var isMd = t === 'text/markdown';
+    var isYaml = t === 'text/yaml';
+    newfilePreview.hidden = !(isMd || isYaml);
     if (isMd && window.marked && window.DOMPurify) {
+      newfilePreview.classList.remove('nf-yaml');
       newfilePreview.innerHTML = window.DOMPurify.sanitize(window.marked.parse(newfileContent.value || ''));
     } else if (isMd) {
+      newfilePreview.classList.remove('nf-yaml');
       newfilePreview.textContent = newfileContent.value || '';
+    } else if (isYaml) {
+      newfilePreview.classList.add('nf-yaml');
+      newfilePreview.innerHTML = yamlToHtml(newfileContent.value || '');
     }
   }
   function nfEffectiveFilename() {
@@ -5015,6 +5155,7 @@ app.get("/users", requireSessionOrObserver, (c) => {
 const STATIC_ASSETS: Record<string, string> = {
   "marked.min.js": "application/javascript; charset=utf-8",
   "dompurify.min.js": "application/javascript; charset=utf-8",
+  "js-yaml.min.js": "application/javascript; charset=utf-8",
 };
 
 app.get("/static/:filename", async (c) => {
@@ -5040,8 +5181,9 @@ app.get("/static/:filename", async (c) => {
 const ALLOWED_DOWNLOAD_MIME = new Set([
   "image/png", "image/jpeg", "image/gif", "image/webp",
   "application/pdf",
-  "text/plain", "text/csv", "text/markdown",
-  "application/json", "application/zip", "application/gzip", "application/x-tar",
+  "text/plain", "text/csv", "text/markdown", "text/yaml",
+  "application/json", "application/yaml", "application/x-yaml",
+  "application/zip", "application/gzip", "application/x-tar",
   "video/mp4", "video/webm",
   "audio/mpeg", "audio/ogg", "audio/wav",
 ]);
@@ -5104,7 +5246,7 @@ app.post("/files/upload", requirePostSession, async (c) => {
 // message-attach flow on the composer side. Allowlist is a narrow subset
 // of ALLOWED_DOWNLOAD_MIME (text-only — image-types stay upload-only).
 const ALLOWED_CREATE_MIME = new Set([
-  "text/markdown", "text/plain", "text/csv", "application/json",
+  "text/markdown", "text/plain", "text/csv", "application/json", "text/yaml",
 ]);
 
 app.post("/files/create", requirePostSession, async (c) => {
