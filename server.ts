@@ -1562,6 +1562,85 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
     flex-shrink: 0;
   }
   #attach-btn:hover { color: #c9d1d9; border-color: #58a6ff; }
+  #newfile-btn {
+    background: none;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+    font-weight: bold;
+  }
+  #newfile-btn:hover { color: #c9d1d9; border-color: #58a6ff; }
+  /* New-file modal (v2.6.31) */
+  .modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal[hidden] { display: none; }
+  .modal-card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    width: min(900px, 92vw); height: min(620px, 86vh);
+    display: flex; flex-direction: column;
+  }
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid #21262d;
+  }
+  .modal-head h2 { font-size: 14px; font-weight: 600; color: #e6edf3; }
+  .modal-head button {
+    background: none; border: none; color: #8b949e;
+    font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .modal-head button:hover { color: #c9d1d9; }
+  .modal-row {
+    display: flex; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid #21262d;
+  }
+  .modal-row input, .modal-row select {
+    background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 8px 10px; border-radius: 6px; font: inherit;
+  }
+  .modal-row input { flex: 1; }
+  .modal-row select { min-width: 180px; }
+  .modal-row input:focus, .modal-row select:focus { outline: none; border-color: #58a6ff; }
+  .modal-edit {
+    flex: 1; display: flex; min-height: 0; overflow: hidden;
+  }
+  .modal-edit textarea {
+    flex: 1; background: #0d1117; border: none; color: #c9d1d9;
+    padding: 12px 16px;
+    font-family: 'SF Mono','Cascadia Code','Fira Code','Consolas',monospace;
+    font-size: 13px; line-height: 1.5; resize: none; outline: none;
+  }
+  #newfile-preview {
+    flex: 1; padding: 12px 16px; border-left: 1px solid #21262d;
+    overflow: auto; color: #c9d1d9; font-size: 14px; line-height: 1.5;
+  }
+  #newfile-preview[hidden] { display: none; }
+  #newfile-preview h1, #newfile-preview h2, #newfile-preview h3 { margin: 0.6em 0 0.3em; color: #e6edf3; }
+  #newfile-preview p { margin: 0.4em 0; }
+  #newfile-preview code { background: #21262d; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  #newfile-preview pre { background: #21262d; padding: 8px; border-radius: 4px; overflow: auto; }
+  #newfile-preview a { color: #58a6ff; }
+  #newfile-preview ul, #newfile-preview ol { margin: 0.4em 0; padding-left: 1.6em; }
+  .modal-foot {
+    display: flex; gap: 8px; justify-content: flex-end; align-items: center;
+    padding: 12px 16px; border-top: 1px solid #21262d;
+  }
+  #newfile-err { flex: 1; color: #f85149; font-size: 12px; }
+  .modal-foot button {
+    background: none; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 6px 16px; border-radius: 6px; cursor: pointer; font: inherit;
+  }
+  .modal-foot button:hover { border-color: #8b949e; }
+  .modal-foot button#newfile-save { background: #238636; border-color: #2ea043; color: white; }
+  .modal-foot button#newfile-save:hover { background: #2ea043; border-color: #2ea043; }
+  .modal-foot button#newfile-save:disabled { background: #1a4221; border-color: #1a4221; cursor: wait; }
   .date-divider {
     display: flex;
     align-items: center;
@@ -1712,10 +1791,41 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
       <div id="autocomplete"></div>
       <form id="msg-form">
         <button type="button" id="attach-btn" title="Attach file">&#x1F4CE;</button>
+        <button type="button" id="newfile-btn" title="Compose new file">+</button>
         <input type="file" id="file-input" multiple style="display:none" />
         <textarea id="msg-input" rows="1" placeholder="Type a message... (Shift+Enter for newline)" autocomplete="off"></textarea>
         <button type="submit" id="msg-send">Send</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- 2.6.31: compose-a-new-file modal. Reuses pendingFiles[] flow + the same
+     chip UI as upload. Filetype dropdown drives the extension and toggles a
+     live markdown-preview pane (right side of the editor) when set to .md. -->
+<div id="newfile-modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>New file</h2>
+      <button type="button" id="newfile-close" title="Close">&times;</button>
+    </div>
+    <div class="modal-row">
+      <input type="text" id="newfile-name" autocomplete="off" spellcheck="false" placeholder="filename (no extension)">
+      <select id="newfile-type">
+        <option value="text/markdown">Markdown (.md)</option>
+        <option value="text/plain">Plain text (.txt)</option>
+        <option value="text/csv">CSV (.csv)</option>
+        <option value="application/json">JSON (.json)</option>
+      </select>
+    </div>
+    <div class="modal-edit">
+      <textarea id="newfile-content" spellcheck="false" placeholder="Type content..."></textarea>
+      <div id="newfile-preview" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <span id="newfile-err"></span>
+      <button type="button" id="newfile-cancel">Cancel</button>
+      <button type="button" id="newfile-save">Save &amp; attach</button>
     </div>
   </div>
 </div>
@@ -2726,6 +2836,91 @@ function buildChatPage(username: string, canPost: boolean, sessionToken: string,
   }
 
   attachBtn.addEventListener('click', function() { fileInput.click(); });
+
+  // New-file compose modal (v2.6.31). Reuses pendingFiles[] / renderPendingFiles
+  // so a created file lands in the composer chip row identically to an upload.
+  var newfileBtn = document.getElementById('newfile-btn');
+  var newfileModal = document.getElementById('newfile-modal');
+  var newfileName = document.getElementById('newfile-name');
+  var newfileType = document.getElementById('newfile-type');
+  var newfileContent = document.getElementById('newfile-content');
+  var newfilePreview = document.getElementById('newfile-preview');
+  var newfileErr = document.getElementById('newfile-err');
+  var newfileSave = document.getElementById('newfile-save');
+  var newfileCancel = document.getElementById('newfile-cancel');
+  var newfileClose = document.getElementById('newfile-close');
+  var EXT_BY_MIME = {
+    'text/markdown': '.md', 'text/plain': '.txt',
+    'text/csv': '.csv', 'application/json': '.json'
+  };
+  function nfUpdatePreview() {
+    var isMd = newfileType.value === 'text/markdown';
+    newfilePreview.hidden = !isMd;
+    if (isMd && window.marked && window.DOMPurify) {
+      newfilePreview.innerHTML = window.DOMPurify.sanitize(window.marked.parse(newfileContent.value || ''));
+    } else if (isMd) {
+      newfilePreview.textContent = newfileContent.value || '';
+    }
+  }
+  function nfEffectiveFilename() {
+    var raw = (newfileName.value || '').trim();
+    var ext = EXT_BY_MIME[newfileType.value] || '';
+    // Strip any matching known extension so we don't double up (".md.md").
+    var lower = raw.toLowerCase();
+    for (var k in EXT_BY_MIME) {
+      if (Object.prototype.hasOwnProperty.call(EXT_BY_MIME, k) && lower.endsWith(EXT_BY_MIME[k])) {
+        raw = raw.slice(0, raw.length - EXT_BY_MIME[k].length);
+        break;
+      }
+    }
+    return raw + ext;
+  }
+  function nfOpen() {
+    newfileName.value = 'notes';
+    newfileType.value = 'text/markdown';
+    newfileContent.value = '';
+    newfileErr.textContent = '';
+    newfileModal.hidden = false;
+    nfUpdatePreview();
+    setTimeout(function() { newfileName.focus(); newfileName.select(); }, 0);
+  }
+  function nfClose() { newfileModal.hidden = true; }
+  if (newfileBtn) newfileBtn.addEventListener('click', nfOpen);
+  if (newfileCancel) newfileCancel.addEventListener('click', nfClose);
+  if (newfileClose) newfileClose.addEventListener('click', nfClose);
+  if (newfileModal) newfileModal.addEventListener('click', function(e) {
+    if (e.target === newfileModal) nfClose();  // click backdrop to close
+  });
+  if (newfileType) newfileType.addEventListener('change', nfUpdatePreview);
+  if (newfileContent) newfileContent.addEventListener('input', nfUpdatePreview);
+  // Esc closes
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !newfileModal.hidden) nfClose();
+  });
+  if (newfileSave) newfileSave.addEventListener('click', function() {
+    newfileErr.textContent = '';
+    var fname = nfEffectiveFilename();
+    var extOnly = EXT_BY_MIME[newfileType.value] || '';
+    if (!fname || fname === extOnly) { newfileErr.textContent = 'Filename required'; return; }
+    newfileSave.disabled = true;
+    fetch('/files/create', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: fname, content: newfileContent.value, mime_type: newfileType.value })
+    }).then(function(res) {
+      return res.json().then(function(j) { return { ok: res.ok, status: res.status, body: j }; });
+    }).then(function(r) {
+      if (!r.ok) { newfileErr.textContent = (r.body && r.body.error) || ('HTTP ' + r.status); return; }
+      pendingFiles.push({ id: r.body.id, filename: r.body.filename, size: r.body.size });
+      renderPendingFiles();
+      nfClose();
+    }).catch(function(err) {
+      newfileErr.textContent = (err && err.message) || 'Network error';
+    }).finally(function() {
+      newfileSave.disabled = false;
+    });
+  });
 
   fileInput.addEventListener('change', function() {
     var files = fileInput.files;
@@ -4997,6 +5192,57 @@ app.post("/files/upload", requirePostSession, async (c) => {
   fileUploadsTotal++;
   logEvent("file.uploaded", { uploader: sender, size: file.size, mime: mimeType.split("/")[0], id });
   return c.json({ id, filename: file.name, size: file.size, mime_type: mimeType }, 201);
+});
+
+// 2.6.31: text-only file *creation* from the UI (user composes content in
+// a textarea, picks a filetype, hits Save). Parallel to /files/upload but
+// JSON-bodied — same storage path, same `files` row shape, same chip+
+// message-attach flow on the composer side. Allowlist is a narrow subset
+// of ALLOWED_DOWNLOAD_MIME (text-only — image-types stay upload-only).
+const ALLOWED_CREATE_MIME = new Set([
+  "text/markdown", "text/plain", "text/csv", "application/json",
+]);
+
+app.post("/files/create", requirePostSession, async (c) => {
+  const sender = c.get("sender") as string;
+  const limits = getFileSettings();
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+  const filename = typeof body.filename === "string" ? body.filename.trim() : "";
+  const content  = typeof body.content === "string" ? body.content : "";
+  const declared = typeof body.mime_type === "string" ? body.mime_type.toLowerCase().split(";")[0].trim() : "";
+  if (!filename || filename.length > 255 || filename.includes("/") || filename.includes("\0")) {
+    return c.json({ error: "Invalid filename (1–255 chars, no '/' or null bytes)" }, 400);
+  }
+  if (!ALLOWED_CREATE_MIME.has(declared)) {
+    return c.json({ error: `Unsupported filetype (allowed: ${[...ALLOWED_CREATE_MIME].join(", ")})` }, 400);
+  }
+  // Size check: content is plain text, byteLength via TextEncoder so we
+  // match what actually lands on disk.
+  const bytes = new TextEncoder().encode(content);
+  if (bytes.byteLength > limits.max_file_size) {
+    return c.json({ error: `File too large (max ${limits.max_file_size / 1024 / 1024}MB)` }, 413);
+  }
+  const userUsage = getUserFileStorage(sender);
+  if (userUsage + bytes.byteLength > limits.max_user_storage) {
+    return c.json({ error: `User storage quota exceeded (${Math.round(limits.max_user_storage / 1024 / 1024)}MB per user)` }, 507);
+  }
+  const totalUsage = getTotalFileStorage();
+  if (totalUsage + bytes.byteLength > limits.max_total_storage) {
+    return c.json({ error: "Global storage quota exceeded" }, 507);
+  }
+
+  const id = crypto.randomUUID();
+  const ext = extname(filename).toLowerCase() || "";
+  const storedName = `${id}${ext}`;
+  await Bun.write(`${FILES_DIR}/${storedName}`, bytes);
+  db.run(
+    "INSERT INTO files (id, filename, stored_name, size, mime_type, uploader, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [id, filename, storedName, bytes.byteLength, declared, sender, new Date().toISOString()]
+  );
+  fileUploadsTotal++;
+  logEvent("file.created", { uploader: sender, size: bytes.byteLength, mime: declared.split("/")[0], id });
+  return c.json({ id, filename, size: bytes.byteLength, mime_type: declared }, 201);
 });
 
 // GET /files/storage — get current storage usage (any authenticated user)
