@@ -1,6 +1,6 @@
 {
   "name": "sidechat-monitor",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Background monitor: polls sidechat for pending @-mentions and wakes the Claude Code REPL. As of 0.1.1 (sidechat 2.6.28+) it also tmux-injects /mention-check directly, absorbing the role sc-webhook-server.py used to play so bots no longer need a sibling sidechat-webhook.service for idle-REPL wake.",
   "monitors": "./monitors/monitors.json"
 }

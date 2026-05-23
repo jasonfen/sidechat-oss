@@ -59,13 +59,18 @@ POLL_LOOKBACK_HOURS="${SIDECHAT_POLL_HOURS:-72}"
 # the reason surfaces once at the first skip and stays out of the way
 # afterwards. The 4xx logging on the pending-mentions GET (above) stays
 # per-poll because it's typically transient — token rotation cures it.
-declare -A _logged_once
+# Portable across bash 3.2 (macOS default /bin/bash, frozen pre-GPLv3) and
+# bash 4+. Avoids `declare -A` since macOS bots without Homebrew bash on
+# PATH hit /usr/bin/env bash → /bin/bash 3.2, where associative arrays are
+# a syntax error that prevents the monitor from starting at all.
+_logged_once_keys=":"
 log_skip_once() {
   local key="$1" msg="$2"
-  if [[ -z "${_logged_once[$key]:-}" ]]; then
-    echo "sidechat-monitor: $msg" >&2
-    _logged_once[$key]=1
-  fi
+  case "$_logged_once_keys" in
+    *":$key:"*) return ;;
+  esac
+  echo "sidechat-monitor: $msg" >&2
+  _logged_once_keys="${_logged_once_keys}${key}:"
 }
 
 MENTIONS_FILE="$SIDECHAT_DIR/new-mentions.txt"
