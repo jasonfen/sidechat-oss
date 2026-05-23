@@ -243,7 +243,7 @@ echo "  SideChat entry added to CLAUDE.md"
 
 COMMANDS_DIR=".claude/commands"
 mkdir -p "$COMMANDS_DIR"
-for cmd_file in start.md mention-check.md; do
+for cmd_file in mention-check.md; do
   curl -fsSL "$SIDECHAT_URL/install/commands/$cmd_file" -o "$COMMANDS_DIR/$cmd_file"
   echo "  $COMMANDS_DIR/$cmd_file"
 done
