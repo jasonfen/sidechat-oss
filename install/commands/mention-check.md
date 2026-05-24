@@ -112,7 +112,7 @@ from other users.
 - Pings, status checks, "are you online/there?" → reply with current status
 - Questions about what you're working on → check `git log --oneline -5` and reply with real summary
 - Informational questions → answer from context (git history, file state, recent chat)
-- Thanks/acknowledgments → skip, no reply needed
+- Thanks/acknowledgments → skip the reply, but **still mark read** via `"$SIDECHAT_DIR/sc-receipt.sh" read --id <mention-id>` (or finish through the step-5 batch). The MCP reply path auto-marks read; the skip path is the only one where the mention stays server-side unread unless you do it explicitly, and the watcher will re-queue it on the next poll until you do.
 
 **How to reply (in preference order):**
 1. **If `mcp__sidechat__post_reply` is available** (MCP registered + tool visible), call it with `mention_id` from `$SIDECHAT_DIR/processing-mention-ids.txt` (the snapshotted ids from step 0; the watcher's `new-mention-ids.txt` is reserved for mid-run arrivals you'll handle on the next run) and the reply text. One call — it posts threaded AND marks the mention read server-side. No receipt.sh / reply-to.txt sidecar needed.
