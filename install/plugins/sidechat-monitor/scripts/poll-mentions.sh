@@ -25,7 +25,21 @@
 #
 # Required in config: SERVER_URL, TOKEN.
 
-set -euo pipefail
+set -Eeuo pipefail
+
+# Permanent ERR trap (0.1.8 / sidechat 2.6.40). Two transient exit-6 (DNS)
+# failures at bring-up went undiagnosed because Monitor's stderr capture was
+# already gone by the time we looked — so the trap tees to a persistent file.
+# `set -E` lets the trap fire inside the helper functions defined below; the
+# trap costs nothing unless `set -e` would have killed us anyway, in which
+# case the diagnostic is the only thing standing between us and silent death.
+# Kept permanently as operator aid: this script has eaten three portability
+# bugs already (bash 3.2 `declare -A`, BSD `date +%N`, macOS shebang). Do
+# not "clean up" as unused.
+trap 'rc=$?; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+      msg=$(printf "sidechat-monitor: ERR [ts=%s pid=%d line=%d cmd=%q exit=%d]" \
+            "$ts" "$$" "$LINENO" "$BASH_COMMAND" "$rc"); \
+      echo "$msg" >&2; echo "$msg" >>/tmp/sc-monitor-err.log' ERR
 
 # Config resolution is shared with /mention-check via resolve-sidechat-dir.sh —
 # single source of truth means plugin and slash command agree on which install
@@ -112,7 +126,7 @@ download_attachment() {
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
-PLUGIN_VERSION="0.1.6"
+PLUGIN_VERSION="0.1.8"
 LAST_INJECT_MS=""
 
 # Epoch milliseconds. `date +%N` is a GNU coreutils extension; BSD `date`
