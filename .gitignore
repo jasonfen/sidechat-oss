@@ -5,6 +5,7 @@ bun.lockb
 .claude/agent-memory/
 .claude/agents/
 .claude/settings.local.json
+.claude/settings.json
 *.crt
 *.key
 CLAUDE.md
