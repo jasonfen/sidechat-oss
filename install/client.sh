@@ -1,20 +1,144 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL <server>/install/client.sh | bash -s -- [--name <botname>] [--force] [<server-url>]
+#        curl -fsSL <server>/install/client.sh | bash -s -- --remove [--yes]   # uninstall
 set -euo pipefail
 
 SIDECHAT_URL=""
 SCRIPT_DIR=".sidechat"
 CLI_BOT_NAME=""
 FORCE=false
+REMOVE=false
+ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name) CLI_BOT_NAME="$2"; shift 2 ;;
     --force) FORCE=true; shift ;;
+    --remove|--uninstall) REMOVE=true; shift ;;
+    --yes|-y) ASSUME_YES=true; shift ;;
     -*) echo "Unknown option: $1" >&2; exit 1 ;;
     *) SIDECHAT_URL="$1"; shift ;;
   esac
 done
+
+# --- Uninstall path --------------------------------------------------------
+# Reverse everything the installer below sets up: running processes, the
+# systemd webhook service, MCP + plugin registration, Claude Code hooks and
+# permissions, the CLAUDE.md block, the /mention-check command, the
+# .gitignore entry, and the .sidechat/ directory itself.
+#
+# Intentionally NOT removed: ~/.ssh/id_ed25519 (the operator's general SSH
+# key, not ours) and the server-side bot record (there is no client-side
+# deregister endpoint — an admin removes the bot on the server).
+#
+#   curl -fsSL <server>/install/client.sh | bash -s -- --remove
+#   ./client.sh --remove [--yes]
+if [[ "$REMOVE" == "true" ]]; then
+  MCP_NAME="${SIDECHAT_MCP_NAME:-sidechat}"
+  BOT_NAME=""
+  [[ -f "$SCRIPT_DIR/config" ]] && BOT_NAME=$(grep '^BOT_NAME=' "$SCRIPT_DIR/config" 2>/dev/null | cut -d= -f2- || true)
+
+  echo "=== SideChat Client Uninstaller ==="
+  echo ""
+  echo "This will remove SideChat from $(pwd)${BOT_NAME:+ (bot: $BOT_NAME)}:"
+  echo "  - kill webhook/monitor processes and remove the systemd service"
+  echo "  - unregister the MCP server and the sidechat-monitor plugin"
+  echo "  - strip SideChat hooks/permissions from .claude/settings.local.json"
+  echo "  - remove the CLAUDE.md block, /mention-check command, .gitignore entry"
+  echo "  - delete the .sidechat/ directory (config, token, history, downloads)"
+  echo ""
+  echo "Your SSH key (~/.ssh/id_ed25519) and the server-side bot record are kept."
+  echo ""
+
+  if [[ "$ASSUME_YES" != "true" && "${CLAUDECODE:-}" != "1" && -r /dev/tty ]]; then
+    read -rp "Proceed with removal? [y/N] " CONFIRM < /dev/tty
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+      echo "Aborted. Nothing removed."
+      exit 0
+    fi
+  fi
+
+  # 1. Stop running processes (best-effort; sc-cleanup kills the bot's pollers).
+  if [[ -x "$SCRIPT_DIR/sc-cleanup.sh" ]]; then
+    "$SCRIPT_DIR/sc-cleanup.sh" 2>/dev/null || true
+    echo "  ran sc-cleanup.sh (stopped pollers)"
+  fi
+  if [[ -f "$SCRIPT_DIR/.webhook-listener.pid" ]]; then
+    OLD_PID=$(cat "$SCRIPT_DIR/.webhook-listener.pid" 2>/dev/null || true)
+    [[ -n "${OLD_PID:-}" ]] && kill "$OLD_PID" 2>/dev/null || true
+  fi
+  command -v fuser &>/dev/null && fuser -k 7777/tcp 2>/dev/null || true
+
+  # 2. Systemd webhook service (needs sudo).
+  WEBHOOK_SERVICE="/etc/systemd/system/sidechat-webhook.service"
+  if command -v systemctl &>/dev/null && [[ -f "$WEBHOOK_SERVICE" ]]; then
+    if [[ "$(id -u)" == "0" ]] || sudo -n true 2>/dev/null; then
+      sudo systemctl disable --now sidechat-webhook.service 2>/dev/null || true
+      sudo rm -f "$WEBHOOK_SERVICE"
+      sudo systemctl daemon-reload 2>/dev/null || true
+      echo "  removed sidechat-webhook.service"
+    else
+      echo "  NOTE: sidechat-webhook.service needs sudo to remove. Run:"
+      echo "    sudo systemctl disable --now sidechat-webhook.service && sudo rm $WEBHOOK_SERVICE && sudo systemctl daemon-reload"
+    fi
+  fi
+
+  # 3. MCP server + monitor plugin + marketplace.
+  if command -v claude &>/dev/null; then
+    claude mcp remove "$MCP_NAME" -s user >/dev/null 2>&1 || true
+    claude plugin uninstall sidechat-monitor@sidechat-oss >/dev/null 2>&1 || true
+    claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
+    echo "  unregistered MCP server '$MCP_NAME' + sidechat-monitor plugin"
+    echo "  (restart Claude Code to release the in-memory MCP/plugin subprocess)"
+  else
+    echo "  NOTE: \`claude\` not on PATH — skipped MCP/plugin unregister."
+  fi
+
+  # 4. Strip SideChat hooks + permissions from settings.local.json, preserving
+  #    every non-sidechat hook. Mirrors the merge filter used on install.
+  SETTINGS_FILE=".claude/settings.local.json"
+  if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
+    if jq '
+      ((.hooks // {}) | to_entries | map(
+        .value |= [.[] |
+          .hooks |= [.[] | select((.command // "") | contains(".sidechat/hooks/") | not)] |
+          select((.hooks | length) > 0)
+        ]
+      ) | map(select((.value | length) > 0)) | from_entries) as $hooks |
+      .hooks = $hooks |
+      (if (.permissions.allow) then
+         .permissions.allow |= map(select(contains(".sidechat") | not))
+       else . end)
+    ' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
+      mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+      echo "  stripped SideChat hooks/permissions from $SETTINGS_FILE"
+    else
+      rm -f "$SETTINGS_FILE.tmp"
+      echo "  WARN: could not edit $SETTINGS_FILE — remove sidechat hooks/perms by hand." >&2
+    fi
+  fi
+
+  # 5. CLAUDE.md block (same span the installer writes/replaces).
+  if [[ -f CLAUDE.md ]] && grep -q "^## SideChat" CLAUDE.md 2>/dev/null; then
+    sed '/^## SideChat/,/^Do not manually post/d' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
+    sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md
+    echo "  removed SideChat block from CLAUDE.md"
+  fi
+
+  # 6. /mention-check command + .gitignore entry + the directory itself.
+  rm -f ".claude/commands/mention-check.md"
+  if [[ -f .gitignore ]] && grep -q '^\.sidechat/$' .gitignore; then
+    grep -v '^\.sidechat/$' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
+    echo "  removed .sidechat/ from .gitignore"
+  fi
+  rm -rf "$SCRIPT_DIR"
+  echo "  deleted $SCRIPT_DIR/"
+
+  echo ""
+  echo "=== SideChat removed ==="
+  echo "Restart Claude Code so it drops the MCP server and monitor plugin."
+  exit 0
+fi
 
 if [[ -z "$SIDECHAT_URL" && -f "$SCRIPT_DIR/config" ]]; then
   SIDECHAT_URL=$(grep '^SERVER_URL=' "$SCRIPT_DIR/config" | cut -d= -f2-)
