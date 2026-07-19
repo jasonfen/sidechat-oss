@@ -159,6 +159,23 @@ if $USE_BINARY; then
     fi
 
     [[ -x "$CACHED_BIN" ]] && MCP_BIN="$CACHED_BIN"
+
+    # Prune superseded cached binaries. Each sidechat-mcp binary is ~98 MB and
+    # this script historically never cleaned them, so .sidechat/mcp/ grew by one
+    # binary per release (fenbot flagged 8 stale versions / ~780 MB, 2026-07-18).
+    # Only prune once we hold a live binary, and never remove the one in use or
+    # its checksums file.
+    if [[ -x "$CACHED_BIN" ]]; then
+      _keep_bin=$(basename "$CACHED_BIN")
+      _keep_sums=$(basename "$CACHED_SUMS")
+      for _f in "$BIN_CACHE"/sidechat-mcp-${PLATFORM}-* "$BIN_CACHE"/SHA256SUMS-*; do
+        [[ -e "$_f" ]] || continue
+        case "$(basename "$_f")" in
+          "$_keep_bin"|"$_keep_sums") continue ;;
+        esac
+        rm -f "$_f" && echo "  pruned stale mcp cache: $(basename "$_f")"
+      done
+    fi
   fi
 fi
 
