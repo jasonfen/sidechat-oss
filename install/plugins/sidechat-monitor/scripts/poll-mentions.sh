@@ -126,7 +126,7 @@ download_attachment() {
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
-PLUGIN_VERSION="0.1.8"
+PLUGIN_VERSION="0.1.9"
 LAST_INJECT_MS=""
 
 # Epoch milliseconds. `date +%N` is a GNU coreutils extension; BSD `date`
@@ -184,9 +184,18 @@ while true; do
   # through to '{}', and the loop walked empty forever with no log line.
   # Only 4xx complains (auth/permission — operator-actionable); 5xx and
   # network errors stay quiet because they're transient and self-healing.
+  # 0.1.9 (sidechat 2.6.43): `|| true` is load-bearing under `set -Eeuo
+  # pipefail` — a transient curl non-zero (exit 6 = DNS resolve failure on a
+  # tailnet blip; exit 7/28 = connect/timeout) would otherwise kill the whole
+  # poller *before* the `http_code != 200 -> body='{}'` fallback below could
+  # run, so the "stay quiet, self-heal" comment above was aspirational, not
+  # actual. fenbot's ERR trap caught three exit-6 deaths (line 191, installed
+  # 0.1.8) before this landed. With the guard, a failed fetch yields an empty
+  # response -> empty http_code -> body='{}' -> one quiet empty poll, exactly
+  # as intended. The 4xx branch still fires when the server *does* answer.
   response=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" \
     "$SERVER_URL/messages/pending-mentions?since_hours=${POLL_LOOKBACK_HOURS}" \
-    2>/dev/null)
+    2>/dev/null) || true
   http_code=$(printf '%s' "$response" | tail -n1)
   body=$(printf '%s' "$response" | sed '$d')
   if [[ "$http_code" =~ ^4 ]]; then

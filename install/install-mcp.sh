@@ -30,7 +30,25 @@
 
 set -euo pipefail
 
-SIDECHAT_DIR="${SIDECHAT_DIR:-$HOME/.sidechat}"
+# Resolve the sidechat install dir. Honor an explicit $SIDECHAT_DIR, else the
+# script's own directory (install-mcp.sh ships *inside* the install, so this is
+# the most reliable anchor when invoked as `.sidechat/install-mcp.sh`), else
+# $PWD/.sidechat, and only then the legacy $HOME/.sidechat. The pre-2.6.43 hard
+# default to $HOME/.sidechat broke bots installed at $PWD/.sidechat (fenbot,
+# 2026-07-25): a scope=mcp token re-mint died with a misleading
+# "config not found. Run install/client.sh first" when the install was fine,
+# just not under $HOME. poll-mentions.sh already resolves this way via
+# resolve-sidechat-dir.sh; install-mcp.sh never got the treatment.
+if [[ -z "${SIDECHAT_DIR:-}" ]]; then
+  _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$_self_dir/config" ]]; then
+    SIDECHAT_DIR="$_self_dir"
+  elif [[ -f "$PWD/.sidechat/config" ]]; then
+    SIDECHAT_DIR="$PWD/.sidechat"
+  else
+    SIDECHAT_DIR="$HOME/.sidechat"
+  fi
+fi
 CONFIG="$SIDECHAT_DIR/config"
 BIN_CACHE="$SIDECHAT_DIR/mcp"
 RELEASE_REPO="${SIDECHAT_RELEASE_REPO:-jasonfen/sidechat-oss}"
