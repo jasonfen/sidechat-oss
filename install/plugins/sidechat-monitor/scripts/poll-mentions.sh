@@ -126,7 +126,7 @@ download_attachment() {
 #
 # Thanks to fenbot for flagging the race-window shape before UAT.
 
-PLUGIN_VERSION="0.1.9"
+PLUGIN_VERSION="0.1.10"
 LAST_INJECT_MS=""
 
 # Epoch milliseconds. `date +%N` is a GNU coreutils extension; BSD `date`
@@ -167,6 +167,109 @@ send_heartbeat() {
     -d "$body" \
     "$SERVER_URL/bots/heartbeat" >/dev/null 2>&1 || true
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0.1.10 (sidechat 2.6.44): duplicate-instance guard.
+#
+# `/reload-plugins` starts a fresh poll-mentions.sh WITHOUT stopping the old
+# one, so two monitors race the same $IDS_FILE and double-fire /mention-check
+# (fenbot, 2026-07-25). 2.6.43 mitigated by making the sc-update notice say
+# "restart, don't reload"; this is the actual guard so a second live monitor
+# stands down instead of racing.
+#
+# Mechanism: an atomic `mkdir` mutex — portable where flock (absent on macOS),
+# `declare -A`, and `date +%N` (both absent on bash 3.2) are not. The winner of
+# the mkdir owns $LOCK_DIR and records its pid in $LOCK_PID; a later start that
+# finds the dir exits 0 iff the recorded pid is a live poll-mentions process.
+# Dead/stale/reused-pid holders are reclaimed. Scope is one monitor per
+# $SIDECHAT_DIR — distinct installs never contend, which is exactly the
+# granularity that matters (the double-fire needs a shared $IDS_FILE).
+# Verified T1-T5 twice (ansi + fenbot), incl. the shipping artifact.
+LOCK_DIR="$SIDECHAT_DIR/.monitor.lock"
+LOCK_PID="$LOCK_DIR/pid"
+
+# Is $1 a live poll-mentions process? The ps check guards against pid reuse: a
+# dead monitor's pid recycled by an unrelated long-lived process must NOT read
+# as "monitor still running" (that would wedge — no monitor ever starts).
+#
+# variant D (fenbot's measured recommendation): ps only *downgrades* a live
+# holder to stale on POSITIVE evidence of a non-monitor. No usable ps output
+# (BSD argv truncation, restricted ps, hidepid mounts) falls back to `kill -0`
+# semantics — assume alive, stand down. The naive `ps … | grep -q` disarmed
+# silently when ps returned empty: every holder read stale → every starter
+# reclaimed → no guard at all while the code looked guarded (fenbot measured
+# 3/3 survivors in a 3-racer test). `[ -z "$cmd" ] && return 0` is the
+# load-bearing line; D is C where ps works, B where it doesn't, never disarming.
+#
+# NB: the 'poll-mentions' token is this script's own BASENAME — load-bearing.
+# Renaming/symlinking so its argv no longer contains 'poll-mentions' makes ps
+# under-match → degrades safe (stand down) thanks to D, not disarm; but keep the
+# invocation name literal so the strict arm keeps working.
+monitor_alive() {
+  local pid="$1" cmd
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  [ -z "$cmd" ] && return 0          # no evidence -> assume alive (safe)
+  case "$cmd" in
+    *poll-mentions*) return 0 ;;     # positively a monitor
+    *)               return 1 ;;     # positively a non-monitor -> stale, reclaim
+  esac
+}
+
+acquire_monitor_lock() {
+  local tries=0 oldpid w
+  while [ "$tries" -lt 50 ]; do
+    tries=$((tries + 1))
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      # Won the race. Record our pid immediately — before any slow work — so a
+      # concurrent starter sees a live holder, not an empty lock.
+      echo "$$" > "$LOCK_PID"
+      return 0
+    fi
+    # Dir exists — inspect the holder.
+    oldpid=$(cat "$LOCK_PID" 2>/dev/null || echo "")
+    if [ -z "$oldpid" ]; then
+      # Dir exists but no pid yet: winner is mid-acquire (µs window) or died
+      # right after mkdir. Re-check briefly before treating it as stale.
+      w=0
+      while [ "$w" -lt 5 ]; do
+        w=$((w + 1))
+        sleep 0.1
+        oldpid=$(cat "$LOCK_PID" 2>/dev/null || echo "")
+        [ -n "$oldpid" ] && break
+      done
+    fi
+    if monitor_alive "$oldpid"; then
+      return 1   # a real monitor owns this install — stand down
+    fi
+    # Stale (holder dead, pid reused by a non-monitor, or never written).
+    # Reclaim and retry. rm+mkdir stays race-safe: whoever's next mkdir wins;
+    # the loser re-evaluates and sees the winner's live pid.
+    rm -rf "$LOCK_DIR"
+  done
+  echo "sidechat-monitor: lock contention never converged after $tries tries; assuming another monitor is running — exiting" >&2
+  return 1
+}
+
+release_monitor_lock() {
+  # Only remove the lock if WE own it — never clobber a lock we stood down for.
+  if [ "$(cat "$LOCK_PID" 2>/dev/null || echo "")" = "$$" ]; then
+    rm -rf "$LOCK_DIR"
+  fi
+}
+
+if ! acquire_monitor_lock; then
+  echo "sidechat-monitor: another monitor already running for $SIDECHAT_DIR; this instance exiting (restart to update, don't /reload-plugins)" >&2
+  exit 0
+fi
+# EXIT covers normal exit + `set -e`/ERR-trap death; TERM/INT cover CC's
+# teardown on /reload or shutdown. SIGKILL can't be trapped — the stale-reclaim
+# path above handles the lock it leaves behind on the next start. These compose
+# with the top-of-file ERR trap (separate signals); release is idempotent.
+trap 'release_monitor_lock' EXIT
+trap 'release_monitor_lock; exit 143' TERM
+trap 'release_monitor_lock; exit 130' INT
 
 while true; do
   # 0.1.2: re-source config each iteration so TOKEN rotations (via
