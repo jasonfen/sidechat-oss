@@ -26,6 +26,13 @@ if [[ -z "$HASH" || -z "$MSG" ]]; then
   exit 0
 fi
 
-"$SC_POST" "Pushed $HASH — $MSG" >/dev/null 2>&1 &
+# Run synchronously (not backgrounded). PostToolUse hooks fire after the
+# tool result is already returned to the model, so there's no user-facing
+# latency cost — and backgrounding here used to race the harness's process-
+# group cleanup: if sc-post.sh (esp. on a 401 re-auth round-trip) hadn't
+# finished by the time the parent hook exited, the orphaned child could get
+# reaped mid-flight with zero trace (all output was silently swallowed).
+# Well within the hook's 10s timeout for a plain POST.
+"$SC_POST" "Pushed $HASH — $MSG" >/dev/null 2>&1
 
 exit 0

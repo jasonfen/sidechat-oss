@@ -32,7 +32,12 @@ if [[ -f "$REPLY_TO_FILE" ]]; then
 fi
 
 if [[ -x "$SC_POST" ]]; then
-  "$SC_POST" "${REPLY_ARGS[@]}" >/dev/null 2>&1 &
+  # Synchronous, not backgrounded — see post-push.sh for the rationale
+  # (backgrounding here raced the harness's process-group cleanup and could
+  # silently drop the post, e.g. mid a 401 re-auth round-trip). No
+  # user-facing latency cost: PostToolUse hooks fire after the tool result
+  # is already returned to the model, well within this hook's timeout.
+  "$SC_POST" "${REPLY_ARGS[@]}" >/dev/null 2>&1
 fi
 
 exit 0
