@@ -176,6 +176,17 @@ if CLAUDE_BLOCK=$(curl -fsSL "$SERVER_URL/install/claude-md-block" 2>/dev/null);
   fi
 fi
 
+# Refresh the canonical operator cheatsheet (exact command syntax, JSON
+# schemas, receipt-state table) referenced from the CLAUDE.md block. Simple
+# always-overwrite fetch — no diff/hash gating like the CLAUDE.md block above,
+# since this file lives on its own with no local edits to preserve.
+if curl -fsSL "$SERVER_URL/install/sc-cheatsheet.md" -o "$SCRIPT_DIR/sc-cheatsheet.md.new" 2>/dev/null; then
+  mv "$SCRIPT_DIR/sc-cheatsheet.md.new" "$SCRIPT_DIR/sc-cheatsheet.md"
+  echo "  sc-cheatsheet.md"
+else
+  rm -f "$SCRIPT_DIR/sc-cheatsheet.md.new"
+fi
+
 # Record the server's current build SHA for client-version tracking
 if SERVER_VER=$(curl -fsSL "$SERVER_URL/install/version" 2>/dev/null); then
   echo "${SERVER_VER}" | tr -d '\r\n' > "$SCRIPT_DIR/sc-version.txt"

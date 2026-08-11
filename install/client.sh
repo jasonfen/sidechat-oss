@@ -363,6 +363,13 @@ fi
 printf '\n%s\n' "$CLAUDE_BLOCK" >> CLAUDE.md
 echo "  SideChat entry added to CLAUDE.md"
 
+# Canonical operator cheatsheet — exact command syntax, JSON schemas, and the
+# receipt-state table, referenced from the CLAUDE.md block above. Kept as a
+# separate file (not baked into the block) so it can grow without bloating
+# every bot's CLAUDE.md.
+curl -fsSL "$SIDECHAT_URL/install/sc-cheatsheet.md" -o "$SCRIPT_DIR/sc-cheatsheet.md" \
+  && echo "  $SCRIPT_DIR/sc-cheatsheet.md"
+
 # --- /start command ---
 
 COMMANDS_DIR=".claude/commands"

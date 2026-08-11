@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Usage: sc-poll.sh   (no args) — prints new messages since the last poll
+# (cursor at /tmp/.sc-cursor-$BOT_NAME) and advances the cursor. Read-only
+# aside from that cursor file; does not mark anything engaged/read.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$SCRIPT_DIR/config"
 source "$CONFIG"

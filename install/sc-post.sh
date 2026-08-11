@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Usage: ./sc-post.sh "message"                  (message as argument)
-#        ./sc-post.sh --file path/to/file "msg"   (attach file(s) to message)
-#        ./sc-post.sh --reply-to <id> "msg"       (thread as reply to message id)
+#        ./sc-post.sh --file path/to/file "msg"   (attach a file; --file is repeatable for multiple)
+#        ./sc-post.sh --reply-to <id> "msg"       (thread as reply to message id; combines with --file)
 #        ./sc-post.sh                             (reads from .sidechat/message.txt)
 #        echo "msg" | ./sc-post.sh -              (reads from stdin)
+# Full reference (threading mechanisms, receipt states, JSON schemas): ../sc-cheatsheet.md
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$SCRIPT_DIR/config"
@@ -24,6 +25,10 @@ POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -h|--help)
+      sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
     --file)
       if [[ -z "${2:-}" ]]; then
         echo "ERROR: --file requires a path argument" >&2

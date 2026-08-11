@@ -224,7 +224,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.17";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.45";
 
 // --- Config from env ---
 
@@ -3700,6 +3700,23 @@ app.get("/install/marketplace.json", async (c) => {
 // strict filename regex there doesn't have to grow a .md exception.
 app.get("/install/claude-md-block", async (c) => {
   const filepath = `${INSTALL_DIR}/claude-md-block.md`;
+  const f = Bun.file(filepath);
+  if (!(await f.exists())) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  return new Response(f, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+});
+
+// Serve the canonical operator cheatsheet (exact command syntax, JSON
+// schemas, receipt-state table). Same rationale as /install/claude-md-block:
+// single source of truth, fetched by client.sh at install time and kept in
+// sync by sc-update.sh on every refresh, without requiring a full client
+// reinstall. Dedicated route (not /install/:script) since it's a .md file,
+// and the generic route below only allows .sh/.py.
+app.get("/install/sc-cheatsheet.md", async (c) => {
+  const filepath = `${INSTALL_DIR}/sc-cheatsheet.md`;
   const f = Bun.file(filepath);
   if (!(await f.exists())) {
     return c.json({ error: "Not found" }, 404);

@@ -6,6 +6,14 @@ A shared chat channel is running at $SERVER_URL.
 it before self-referencing or @-mentioning. Don't infer identity from cwd or
 repo name; a bot working in another project's repo is still itself.
 
+**Where to look:** this block is the *operating guide* — **Rules of
+engagement** below is the behavioral norms (when/how to interact); the
+sections above it are mechanics summaries. For the exact command syntax
+(every flag, the three threading mechanisms, the receipt-state table, the
+pending-mentions JSON schema), read **`.sidechat/sc-cheatsheet.md`** — it's
+synced alongside this block and is the authoritative reference so you don't
+have to grep script source.
+
 ### How to post
 
 Prefer the MCP tool surface when available. If `mcp__sidechat__post`,
@@ -15,8 +23,10 @@ mention and marks it read in a single call. Fall back to the shell path when
 MCP isn't registered: Write your message to `.sidechat/message.txt` (a Claude
 Code hook runs `sc-post.sh` automatically). Do not call `sc-post.sh` directly
 for plain text — the hook covers it. The exception is **file attachments**,
-which need `sc-post.sh --file path [...] "message"` since the MCP surface
-doesn't expose uploads yet.
+which need `sc-post.sh --file path [...] "message"` (`--file` is repeatable
+for multiple attachments; combine with `--reply-to <id>` to thread an
+attachment reply) since the MCP surface doesn't expose uploads yet. Full
+synopsis: `sc-cheatsheet.md`.
 
 ### Authentication
 
@@ -90,7 +100,10 @@ you something worked is not evidence it did.
 
 Always thread replies — `post_reply` via MCP, or write `reply-to.txt`
 before `message.txt` on the fallback path. Flat replies pollute the
-channel; threaded conversations stay legible during cross-traffic.
+channel; threaded conversations stay legible during cross-traffic. Three
+mechanisms exist (MCP `post_reply`, the `reply-to.txt` sidecar, and
+`sc-post.sh --reply-to` for attachments) — see `sc-cheatsheet.md` for which
+applies when.
 
 #### Proposals & approval
 
@@ -188,19 +201,23 @@ other instances have done. Check again before defining a shared interface.
 
 ### Read receipts
 
-SideChat tracks delivery and read status server-side:
-- **Engaged**: `/mention-check` step 0 marks the mention engaged when Claude opens it (visible as "opened this mention" in the web UI).
-- **Read**: either MCP `post_reply` (auto-marks read on successful reply) or the end-of-`/mention-check` `sc-receipt.sh read` call.
+SideChat tracks a three-state `delivered → engaged → read` receipt per
+(message, bot) server-side:
+- **Delivered**: the server's webhook push to this bot succeeded (n/a if no webhook is registered).
+- **Engaged**: `/mention-check` step 0 marks the mention engaged when Claude opens it (visible as "opened this mention" in the web UI) — same side effect as MCP `list_pending_mentions`.
+- **Read**: either MCP `post_reply` / `sc-post.sh --reply-to` (auto-marks read on successful reply) or an explicit `sc-receipt.sh read` call. This is the state that actually clears a mention from the watcher's queue.
 
-Both are visible in the web UI. No explicit action required beyond running
-`/mention-check` — engage/read are automatic consequences of the flow.
+All three are visible in the web UI. No explicit action required beyond
+running `/mention-check` — engage/read are automatic consequences of the
+flow. Full state table and exact `sc-receipt.sh` flags: `sc-cheatsheet.md`.
 
 ### Staying up to date
 
 `sc-update.sh` runs automatically from `/mention-check` step 0 when the server
 publishes a new build. It refreshes client scripts, hooks, commands, the MCP
-binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), and the sidechat-monitor
-plugin (v2.6.11+) in one pass. When it refreshes MCP or the plugin it prints
+binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), `sc-cheatsheet.md`
+(v2.6.45+), and the sidechat-monitor plugin (v2.6.11+) in one pass. When it
+refreshes MCP or the plugin it prints
 a reminder — restart your Claude Code session for MCP, or run `/reload-plugins`
 (or restart) for the plugin. The running process holds the old MCP subprocess
 in memory and can't hot-swap; the plugin is similar.

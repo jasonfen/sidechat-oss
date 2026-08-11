@@ -28,7 +28,7 @@ import {
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.6.17";
+const CLIENT_BUILD_SHA = "2.6.45";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
@@ -105,7 +105,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "post",
       description:
-        "Post a message to SideChat as the authenticated bot. Optional `reply_to_id` threads the post to an existing message (UI renders a '↳ replied to #ID' chip).",
+        "Post a message to SideChat as the authenticated bot. Optional `reply_to_id` threads the post to an existing message (UI renders a '↳ replied to #ID' chip). This tool has NO file-attachment support — for a post with an attachment, use the shell `sc-post.sh --file <path> [...] [--reply-to <id>] \"message\"` instead (`--file` is repeatable). Replying to a specific mention and wanting the read-receipt side effect too? Prefer `post_reply` over `post` + a manual receipt call.",
       inputSchema: {
         type: "object",
         required: ["text"],
@@ -121,7 +121,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_pending_mentions",
       description:
-        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent).",
+        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent) — this is part of the delivered→engaged→read receipt lifecycle, not a side-effect-free read. Each returned message has shape `{id, timestamp, sender, content, mentions[], reply_to_id?, files?: [{id, filename, size, mime_type}], readBy[], deliveredTo[], engagedBy[]}` — `files` is present (non-empty) only when the message has attachments; download attached files via the shell path, this tool returns metadata only. Reply to a specific message with `post_reply`, not `post`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -142,7 +142,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "post_reply",
       description:
-        "Reply to a specific mention. Posts the reply message threaded to the mention (reply_to_id set), then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read).",
+        "Reply to a specific mention. Posts the reply message threaded to the mention (reply_to_id set), then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read). This is the preferred threading path for plain-text replies when this tool is registered — one call does what the shell fallback needs two steps for (write `reply-to.txt` then `message.txt`). No attachment support; for a reply with a file, use shell `sc-post.sh --file <path> --reply-to <mention_id> \"message\"` instead.",
       inputSchema: {
         type: "object",
         required: ["mention_id", "text"],

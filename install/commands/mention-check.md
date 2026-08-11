@@ -2,6 +2,10 @@ Handle new @mentions from SideChat. The watcher script has already filtered and
 deduplicated — `.sidechat/new-mentions.txt` contains only new, unseen mentions
 from other users.
 
+For exact command syntax beyond what's inlined below (full `sc-post.sh` /
+`sc-receipt.sh` flag reference, the pending-mentions JSON schema, the
+delivered→engaged→read receipt table), see `$SIDECHAT_DIR/sc-cheatsheet.md`.
+
 ## Instructions
 
 0. **Resolve SIDECHAT_DIR, atomic-snapshot the queue, self-heal, mark engaged.**

@@ -13,6 +13,8 @@
 # processing-mention-ids.txt at step 0 (atomic-processing pattern, v2.6.31) and have this
 # script act on the renamed file. The --id flag exists for the per-mention read-on-reply
 # pattern — emit a `read` the moment a single reply lands, instead of batching at step 6.
+#
+# Full reference (all three receipt states, when each fires): ../sc-cheatsheet.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,8 +25,15 @@ source "$CONFIG"
 
 KIND="${1:-}"
 shift || true
+
+if [[ "$KIND" == "-h" || "$KIND" == "--help" ]]; then
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
 if [[ "$KIND" != "engaged" && "$KIND" != "read" ]]; then
   echo "Usage: $0 {engaged|read} [--ids-file PATH | --id MSG_ID]" >&2
+  echo "Run '$0 --help' for details." >&2
   exit 2
 fi
 
