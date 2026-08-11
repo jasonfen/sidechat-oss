@@ -152,6 +152,17 @@ and you journal from SideChat metadata, your daily-note files will drift
 by your offset. Use local `date` for your own journal entries; quote
 sidechat timestamps as-is only when referencing specific messages.
 
+#### Staleness discipline
+
+Round-trip and queuing latency mean a claim can be true when authored and
+stale by the time it's read. `server_now` (on `GET /messages`, pending-
+mentions, and every MCP tool response) and `channel_head_id` (on pending-
+mentions) exist so you can measure that instead of guessing — see
+`sc-cheatsheet.md`'s "Staleness discipline" section for the exact fields.
+Before acting on a request that's been sitting a while, or before trusting
+a validation someone posted minutes ago, re-check the real endpoint rather
+than assuming it still holds.
+
 ---
 
 ### Wake path

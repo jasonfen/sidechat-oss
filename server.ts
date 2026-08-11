@@ -216,7 +216,7 @@ try { SERVER_SHA = (await Bun.file(`${import.meta.dir}/version.txt`).text()).tri
 // requires clients to re-handshake (tool added/removed/renamed, arg schema
 // changed). Monotonic integer. Separate from SERVER_VERSION because the REST
 // surface can evolve without touching MCP.
-const MCP_SCHEMA_REV = 1;
+const MCP_SCHEMA_REV = 2;
 
 // MCP_EXPECTED_CLIENT_BUILD_SHA is the release-tag of mcp/src/server.ts that
 // this server release pairs with. When a client's CLIENT_BUILD_SHA diverges
@@ -224,7 +224,7 @@ const MCP_SCHEMA_REV = 1;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.45";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.47";
 
 // --- Config from env ---
 
@@ -3465,6 +3465,7 @@ app.get("/install/mcp-version", (c) => {
     server_version: SERVER_VERSION,
     schema_rev: MCP_SCHEMA_REV,
     expected_client_build_sha: MCP_EXPECTED_CLIENT_BUILD_SHA,
+    server_now: serverNow(),
   });
 });
 
@@ -5446,7 +5447,7 @@ app.post("/message", requirePostSession, async (c) => {
   logEvent("message.posted", { sender, length: msg.content.length, has_files: !!msg.files?.length, files_count: msg.files?.length ?? 0, mentions_count: msg.mentions?.length ?? 0 });
   deliverWebhooks(msg);
 
-  return c.json({ id: msg.id, timestamp: msg.timestamp }, 201);
+  return c.json({ id: msg.id, timestamp: msg.timestamp, server_now: serverNow() }, 201);
 });
 
 // POST /messages/:id/read — mark message as read (Claude finished processing)
@@ -5456,13 +5457,14 @@ app.post("/messages/:id/read", requirePostSession, (c) => {
   const exists = db.query("SELECT 1 FROM messages WHERE id = ?").get(id);
   if (!exists) return c.json({ error: "Message not found" }, 404);
   const reader = c.get("sender") as string;
+  const at = serverNow();
   const result = db.run(
     "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
-    [id, reader, "read", new Date().toISOString()]
+    [id, reader, "read", at]
   );
   const wasNew = result.changes > 0;
   if (wasNew) broadcastEvent("read", { id, reader });
-  return c.json({ status: "ok" }, 200);
+  return c.json({ status: "ok", at, server_now: at }, 200);
 });
 
 app.post("/messages/:id/engaged", requirePostSession, (c) => {
@@ -5471,16 +5473,17 @@ app.post("/messages/:id/engaged", requirePostSession, (c) => {
   const exists = db.query("SELECT 1 FROM messages WHERE id = ?").get(id);
   if (!exists) return c.json({ error: "Message not found" }, 404);
   const engager = c.get("sender") as string;
+  const at = serverNow();
   const result = db.run(
     "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
-    [id, engager, "engaged", new Date().toISOString()]
+    [id, engager, "engaged", at]
   );
   const wasNew = result.changes > 0;
   if (wasNew) {
     broadcastEvent("engaged", { id, engager });
     logEvent("message.engaged", { id, engager });
   }
-  return c.json({ status: "ok" }, 200);
+  return c.json({ status: "ok", at, server_now: at }, 200);
 });
 
 // --- Bot heartbeat (mention-pipeline liveness, v2.6.31) ---
@@ -5560,32 +5563,59 @@ app.delete("/webhook", requirePostSession, (c) => {
   return c.json({ cleared: true }, 200);
 });
 
+// 2.6.47: server_now — a single clock reference bots can trust across hosts.
+// Aging a message as `local_now - message.timestamp` is unreliable when bots
+// run on different hosts with clock drift; `server_now` comes from the same
+// authority as `message.timestamp`, so `age = server_now - message.timestamp`
+// is drift-free. Included on every response a bot actually reads for
+// staleness reasoning (see sidechat-timestamp-staleness-proposal.md).
+function serverNow(): string {
+  return new Date().toISOString();
+}
+
 // 2.4.0-dev receipt read-path: source receipts from SQLite
 // `message_receipts` in a single batched SELECT keyed by the incoming
 // message ids. Returns the same shape the prior in-memory version did
 // (readBy / deliveredTo / engagedBy string arrays per message). Write-
 // through from the prior commit keeps message_receipts current on every
 // POST so this is live-correct, not stale.
+//
+// 2.6.47: additive `readByAt`/`deliveredToAt`/`engagedByAt` — parallel
+// arrays of `{bot, at}` alongside the existing bare-name arrays (which are
+// left untouched for backward compat, per the staleness proposal's
+// no-breaking-changes scope). `at` comes straight from message_receipts'
+// existing `created_at` column — no new column needed, this is a read-path
+// change only. Lets a sender measure round-trip latency (how long a message
+// sat before another bot engaged/read it) instead of just knowing *who*.
 function withReceipts(msgs: Message[]) {
   if (msgs.length === 0) return [];
   const ids = msgs.map(m => m.id);
   const placeholders = ids.map(() => "?").join(",");
   const rows = db
     .query(
-      `SELECT message_id, username, kind FROM message_receipts WHERE message_id IN (${placeholders})`
+      `SELECT message_id, username, kind, created_at FROM message_receipts WHERE message_id IN (${placeholders})`
     )
-    .all(...ids) as Array<{ message_id: number; username: string; kind: "delivered" | "engaged" | "read" }>;
-  const byMsg = new Map<number, { read: string[]; delivered: string[]; engaged: string[] }>();
-  for (const id of ids) byMsg.set(id, { read: [], delivered: [], engaged: [] });
+    .all(...ids) as Array<{ message_id: number; username: string; kind: "delivered" | "engaged" | "read"; created_at: string }>;
+  type ReceiptEntry = { bot: string; at: string };
+  const byMsg = new Map<number, {
+    read: string[]; delivered: string[]; engaged: string[];
+    readAt: ReceiptEntry[]; deliveredAt: ReceiptEntry[]; engagedAt: ReceiptEntry[];
+  }>();
+  for (const id of ids) byMsg.set(id, { read: [], delivered: [], engaged: [], readAt: [], deliveredAt: [], engagedAt: [] });
   for (const r of rows) {
     const b = byMsg.get(r.message_id)!;
-    if (r.kind === "read") b.read.push(r.username);
-    else if (r.kind === "delivered") b.delivered.push(r.username);
-    else if (r.kind === "engaged") b.engaged.push(r.username);
+    const entry = { bot: r.username, at: r.created_at };
+    if (r.kind === "read") { b.read.push(r.username); b.readAt.push(entry); }
+    else if (r.kind === "delivered") { b.delivered.push(r.username); b.deliveredAt.push(entry); }
+    else if (r.kind === "engaged") { b.engaged.push(r.username); b.engagedAt.push(entry); }
   }
   return msgs.map(m => {
     const b = byMsg.get(m.id)!;
-    return { ...m, readBy: b.read, deliveredTo: b.delivered, engagedBy: b.engaged };
+    return {
+      ...m,
+      readBy: b.read, deliveredTo: b.delivered, engagedBy: b.engaged,
+      readByAt: b.readAt, deliveredToAt: b.deliveredAt, engagedByAt: b.engagedAt,
+    };
   });
 }
 
@@ -5701,7 +5731,7 @@ app.get("/messages", requireSessionOrObserver, (c) => {
   }
 
   const result = dbRowsToMessages(rows);
-  return c.json({ messages: withReceipts(result), count: result.length });
+  return c.json({ messages: withReceipts(result), count: result.length, server_now: serverNow() });
 });
 
 // GET /messages/all — session or observer auth required.
@@ -5712,7 +5742,7 @@ app.get("/messages", requireSessionOrObserver, (c) => {
 // migrate in a subsequent commit.
 app.get("/messages/all", requireSessionOrObserver, (c) => {
   const all = dbAllMessages();
-  return c.json({ messages: withReceipts(all), count: all.length });
+  return c.json({ messages: withReceipts(all), count: all.length, server_now: serverNow() });
 });
 
 // GET /messages/pending-mentions — bot auth required (requireSession, which
@@ -5780,7 +5810,16 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
   if (newEngagements > 0) {
     logEvent("message.engaged.batch", { engager: me, count: newEngagements });
   }
-  return c.json({ messages: withReceipts(pending), count: pending.length });
+  // channel_head_id: the current max message id, so a caller can tell at a
+  // glance whether anything newer has arrived since a mention it's about to
+  // act on — i.e. whether that mention may already be superseded.
+  const head = db.query("SELECT MAX(id) AS id FROM messages").get() as { id: number | null };
+  return c.json({
+    messages: withReceipts(pending),
+    count: pending.length,
+    server_now: serverNow(),
+    channel_head_id: head.id ?? 0,
+  });
 });
 
 // GET /files-list — enriched file listing for the sidebar files panel

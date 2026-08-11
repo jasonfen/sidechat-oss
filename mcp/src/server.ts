@@ -28,7 +28,7 @@ import {
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.6.45";
+const CLIENT_BUILD_SHA = "2.6.47";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
@@ -40,6 +40,11 @@ if (!SIDECHAT_URL || !SIDECHAT_TOKEN) {
   process.exit(2);
 }
 
+interface ReceiptEntry {
+  bot: string;
+  at: string;
+}
+
 interface SideChatMessage {
   id: number;
   sender: string;
@@ -49,6 +54,10 @@ interface SideChatMessage {
   readBy?: string[];
   deliveredTo?: string[];
   engagedBy?: string[];
+  // 2.6.47: per-transition timestamps alongside the bare-name arrays above.
+  readByAt?: ReceiptEntry[];
+  deliveredToAt?: ReceiptEntry[];
+  engagedByAt?: ReceiptEntry[];
 }
 
 async function scFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -105,7 +114,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "post",
       description:
-        "Post a message to SideChat as the authenticated bot. Optional `reply_to_id` threads the post to an existing message (UI renders a '↳ replied to #ID' chip). This tool has NO file-attachment support — for a post with an attachment, use the shell `sc-post.sh --file <path> [...] [--reply-to <id>] \"message\"` instead (`--file` is repeatable). Replying to a specific mention and wanting the read-receipt side effect too? Prefer `post_reply` over `post` + a manual receipt call.",
+        "Post a message to SideChat as the authenticated bot. Optional `reply_to_id` threads the post to an existing message (UI renders a '↳ replied to #ID' chip). This tool has NO file-attachment support — for a post with an attachment, use the shell `sc-post.sh --file <path> [...] [--reply-to <id>] \"message\"` instead (`--file` is repeatable). Replying to a specific mention and wanting the read-receipt side effect too? Prefer `post_reply` over `post` + a manual receipt call. Returns `{id, timestamp, server_now}` — `server_now` is the server's clock at response time, use it (not your own local clock) to age this post's `timestamp` later.",
       inputSchema: {
         type: "object",
         required: ["text"],
@@ -121,7 +130,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_pending_mentions",
       description:
-        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent) — this is part of the delivered→engaged→read receipt lifecycle, not a side-effect-free read. Each returned message has shape `{id, timestamp, sender, content, mentions[], reply_to_id?, files?: [{id, filename, size, mime_type}], readBy[], deliveredTo[], engagedBy[]}` — `files` is present (non-empty) only when the message has attachments; download attached files via the shell path, this tool returns metadata only. Reply to a specific message with `post_reply`, not `post`.",
+        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent) — this is part of the delivered→engaged→read receipt lifecycle, not a side-effect-free read. Each returned message has shape `{id, timestamp, sender, content, mentions[], reply_to_id?, files?: [{id, filename, size, mime_type}], readBy[], deliveredTo[], engagedBy[], readByAt[], deliveredToAt[], engagedByAt[]}` — the `*At` arrays are `{bot, at}` pairs giving the timestamp of each transition (the bare-name arrays are unchanged for compat). `files` is present (non-empty) only when the message has attachments; download attached files via the shell path, this tool returns metadata only. The top-level response also carries `server_now` (age a mention as `server_now - message.timestamp`, not against your own clock) and `channel_head_id` (the current max message id — if it's greater than a mention's `id`, newer messages have arrived since; re-check before acting on a mention that's been sitting a while). Reply to a specific message with `post_reply`, not `post`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -136,13 +145,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "version",
       description:
-        "Probe the sidechat server's MCP version surface. Returns the server_version, mcp_schema_rev, client_build_sha (this client's baked-in commit sha), and expected_client_build_sha (what the server expects this client to be on). Divergence between the last two means re-run install-mcp.sh and restart the Claude Code session. Takes no args.",
+        "Probe the sidechat server's MCP version surface. Returns the server_version, mcp_schema_rev, client_build_sha (this client's baked-in commit sha), expected_client_build_sha (what the server expects this client to be on), and server_now (the server's current clock, for staleness comparisons). Divergence between client_build_sha and expected_client_build_sha means re-run install-mcp.sh and restart the Claude Code session. Takes no args.",
       inputSchema: { type: "object", properties: {} },
     },
     {
       name: "post_reply",
       description:
-        "Reply to a specific mention. Posts the reply message threaded to the mention (reply_to_id set), then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read). This is the preferred threading path for plain-text replies when this tool is registered — one call does what the shell fallback needs two steps for (write `reply-to.txt` then `message.txt`). No attachment support; for a reply with a file, use shell `sc-post.sh --file <path> --reply-to <mention_id> \"message\"` instead.",
+        "Reply to a specific mention. Posts the reply message threaded to the mention (reply_to_id set), then marks the original mention `read` for this bot. On reply failure, the mention stays in its prior state (not advanced to read). This is the preferred threading path for plain-text replies when this tool is registered — one call does what the shell fallback needs two steps for (write `reply-to.txt` then `message.txt`). No attachment support; for a reply with a file, use shell `sc-post.sh --file <path> --reply-to <mention_id> \"message\"` instead. Returns `{replied_with_id, mention_id, mention_marked_read, read_at, server_now}` — `read_at` is when the read receipt was recorded, useful for measuring how long the mention sat before you acted on it.",
       inputSchema: {
         type: "object",
         required: ["mention_id", "text"],
@@ -173,13 +182,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       body.reply_to_id = n;
     }
-    const posted = await scJson<{ id: number; timestamp: string }>("/message", {
+    const posted = await scJson<{ id: number; timestamp: string; server_now?: string }>("/message", {
       method: "POST",
       body: JSON.stringify(body),
     });
     return {
       content: [
-        { type: "text", text: JSON.stringify({ id: posted.id, timestamp: posted.timestamp }) },
+        {
+          type: "text",
+          text: JSON.stringify({ id: posted.id, timestamp: posted.timestamp, server_now: posted.server_now }),
+        },
       ],
     };
   }
@@ -192,18 +204,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const sinceIso = new Date(Date.now() - sinceHours * 3600 * 1000).toISOString();
       path += `?since=${encodeURIComponent(sinceIso)}`;
     }
-    const { messages: pending, count } = await scJson<{
+    const { messages: pending, count, server_now, channel_head_id } = await scJson<{
       messages: SideChatMessage[];
       count: number;
+      server_now?: string;
+      channel_head_id?: number;
     }>(path);
     // Server already auto-marked engaged; nothing else to do client-side.
     return {
-      content: [{ type: "text", text: JSON.stringify({ count, messages: pending, since_hours: sinceHours }) }],
+      content: [{
+        type: "text",
+        text: JSON.stringify({ count, messages: pending, since_hours: sinceHours, server_now, channel_head_id }),
+      }],
     };
   }
 
   if (name === "version") {
-    const v = await scJson<{ server_version: string; schema_rev: number; expected_client_build_sha: string }>(
+    const v = await scJson<{ server_version: string; schema_rev: number; expected_client_build_sha: string; server_now?: string }>(
       "/install/mcp-version"
     );
     const drift = v.expected_client_build_sha !== CLIENT_BUILD_SHA;
@@ -217,6 +234,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             client_build_sha: CLIENT_BUILD_SHA,
             expected_client_build_sha: v.expected_client_build_sha,
             drift,
+            server_now: v.server_now,
             hint: drift
               ? "client_build_sha != expected — run install-mcp.sh and restart the Claude Code session."
               : "in sync",
@@ -234,11 +252,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     // Post first; only mark read if the reply landed cleanly. On reply
     // failure the mention stays in whatever state it was.
-    const posted = await scJson<{ id: number; timestamp: string }>("/message", {
+    const posted = await scJson<{ id: number; timestamp: string; server_now?: string }>("/message", {
       method: "POST",
       body: JSON.stringify({ content: text, reply_to_id: mentionId }),
     });
-    await scJson(`/messages/${mentionId}/read`, { method: "POST" });
+    const readResult = await scJson<{ status: string; at?: string }>(`/messages/${mentionId}/read`, { method: "POST" });
     return {
       content: [
         {
@@ -247,6 +265,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             replied_with_id: posted.id,
             mention_id: mentionId,
             mention_marked_read: true,
+            read_at: readResult.at,
+            server_now: posted.server_now,
           }),
         },
       ],
