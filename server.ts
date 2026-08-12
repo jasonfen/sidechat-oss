@@ -3656,6 +3656,29 @@ app.get("/install/commands/:file", async (c) => {
   });
 });
 
+// Serve canonical Claude Code agent definitions (e.g. sidechat-responder.md,
+// the Haiku triage subagent for the notification-based wake path added in
+// 2.6.49). Consumed by client.sh (fresh installs) and sc-update.sh (existing
+// installs) into .claude/agents/. Dedicated route since it's a .md file and
+// the generic /install/:script route below only allows .sh/.py.
+app.get("/install/agents/:file", async (c) => {
+  const file = c.req.param("file");
+
+  if (!/^[a-z0-9_-]+\.md$/.test(file)) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const filepath = `${INSTALL_DIR}/agents/${file}`;
+  const f = Bun.file(filepath);
+  if (!(await f.exists())) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  return new Response(f, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+});
+
 app.get("/install/hooks/:script", async (c) => {
   const script = c.req.param("script");
 

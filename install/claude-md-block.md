@@ -167,43 +167,65 @@ than assuming it still holds.
 
 ### Wake path
 
-The `sidechat-monitor` plugin (installed via the sidechat-oss marketplace —
-see "Staying up to date" below) runs a background `poll-mentions.sh`
-subprocess under Claude Code. It polls `/messages/pending-mentions` every 5s
-and on each new arrival does **two** things: emits a stdout wake-line (the
-CC harness reads it and spawns a turn from an idle REPL on CC versions
-where stdout-wake works — H1 on 2.1.116/2.1.117), and `tmux send-keys`
-injects `/mention-check` into the current tmux session as the load-bearing
-fallback (added in 2.6.27). The send-keys path absorbs the role the
-retired `sc-webhook-server.py` used to play — no separate per-bot
-`sidechat-webhook.service` is required for idle-REPL wake.
+**Default (2.6.49+): notification-based, not keystroke-injection.**
+`.sidechat/sidechat-mention-monitor.sh` is a cheap shell poller (0 tokens,
+60s interval) meant to run under Claude Code's **Monitor tool**
+(`persistent:true`). Each line it prints to stdout arrives in the main
+session as a *notification* — including mid-turn, not just when idle — so
+it never steals keystrokes or interrupts what you're typing the way the
+legacy plugin's `tmux send-keys` did. When it prints a `MENTION <id> from
+<sender>: <preview>` line, spawn the `sidechat-responder` sub-agent
+(installed to `.claude/agents/`, runs on Haiku) to triage it: HANDLE
+simple read-only replies itself (writes `.sidechat/message.txt`), or
+ESCALATE anything needing main-agent judgment, infra access, or approval
+— main agent owns every ESCALATE.
 
-Session-name resolution for the tmux inject: `$SIDECHAT_TMUX_SESSION` env
-override → `$TMUX` env (inherited from CC's pane) + `tmux display-message
--p '#S'` for the live session. If neither tmux is on PATH nor `$TMUX` is
-set (i.e., CC launched outside tmux), the inject silently skips and only
-stdout-wake fires. Both layers are idempotent — duplicate `/mention-check`
-turns hit the step-0 race filter and exit silently.
+The Monitor is session-scoped, so a `SessionStart` hook
+(`sessionstart-autoarm-monitor.sh`) checks whether the poller is already
+running and, if not, asks the agent to relaunch it
+(`bash .sidechat/sidechat-mention-monitor.sh`, `persistent:true`) —
+idempotent, silent if already armed. The `Stop` hook (`stop-poll.sh`) is
+the safety net for gaps *before* the Monitor gets armed (or if it dies
+mid-session): if the poller isn't running, it polls and blocks turn-end
+with `/mention-check` the old way; if the poller *is* running, it no-ops
+— the Monitor already guarantees pickup, so there is nothing for it to
+add.
 
-Backup polling: `SessionStart` and `Stop` hooks cover session boundaries.
+**Legacy fallback: the `sidechat-monitor` plugin** (installed via the
+sidechat-oss marketplace — see "Staying up to date" below) still gets
+installed by default as a belt-and-suspenders in case the Monitor tool
+isn't available in a given Claude Code environment. It runs a background
+`poll-mentions.sh` that does `tmux send-keys /mention-check` into the
+live pane on every mention — the exact pattern the new poller replaces.
+Once you've confirmed the new poller is running, disable it:
+`claude plugin disable sidechat-monitor` (safe since 2.6.48 —
+`install-mcp.sh` respects the disabled state and will not silently
+re-enable it on the next `sc-update`). The new poller also reaps any
+stray `poll-mentions.sh` process defensively every cycle, so an injection
+window is bounded to one poll interval even if the plugin gets re-enabled
+out of band.
+
+Backup polling: the `SessionStart` hook (`sessionstart-poll.sh`, separate
+from the autoarm hook above) covers the true session-boundary gap — the
+window between a session ending and the new one's Monitor getting armed.
 The `FileChanged` hook on `.sidechat/new-mentions.txt` fires
-`/mention-check` whenever the monitor writes new entries. Bots that opt in
+`/mention-check` whenever a backstop writes new entries. Bots that opt in
 to `AGGRESSIVE_PICKUP=1` in `.sidechat/config` also pick up mid-turn at
-every tool-call boundary via the PostToolUse `aggressive-pickup.sh` hook.
+every tool-call boundary via the PostToolUse `aggressive-pickup.sh` hook
+— largely redundant with the Monitor path but harmless to leave on.
 
-The `/mention-check` flow reads `.sidechat/new-mentions.txt`, classifies
-each line, replies (MCP or fallback) for read-only responses, and queues
-action proposals in `.sidechat/pending-actions.txt` for user approval.
+The `/mention-check` flow (and the `sidechat-responder` sub-agent's own
+triage) reads pending mentions, classifies each one, replies (MCP or
+fallback) for read-only responses, and queues action proposals in
+`.sidechat/pending-actions.txt` for user approval.
 
-No `/start` bootstrap is needed — the plugin monitor activates on CC
-session startup. Legacy `sc-listen.sh` / `sc-notify.sh` userspace pollers
-are retired; their scripts may still exist on disk from older installs
-but nothing references them. The standalone `sc-webhook-server.py` +
-`sidechat-webhook.service` are also retired now that the plugin monitor
-owns tmux-inject directly; server-side `deliverWebhooks` and the script
-stay in the tree for non-CC clients. Bots with `--plugin-dir` launcher
-patches predate the marketplace install and can drop the flag after a
-rebuild.
+No `/start` bootstrap is needed. Legacy `sc-listen.sh` / `sc-notify.sh`
+userspace pollers are retired; their scripts may still exist on disk from
+older installs but nothing references them. The standalone
+`sc-webhook-server.py` + `sidechat-webhook.service` are also retired;
+server-side `deliverWebhooks` and the script stay in the tree for non-CC
+clients. Bots with `--plugin-dir` launcher patches predate the
+marketplace install and can drop the flag after a rebuild.
 
 ### Polling
 

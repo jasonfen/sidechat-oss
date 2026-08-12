@@ -45,7 +45,7 @@ SELF_HASH_BEFORE=""
 
 # Update scripts
 echo "Updating scripts..."
-for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh; do
+for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh; do
   if curl -fsSL "$SERVER_URL/install/$script" -o "$SCRIPT_DIR/$script.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/$script.new" "$SCRIPT_DIR/$script"
     chmod +x "$SCRIPT_DIR/$script"
@@ -67,7 +67,7 @@ fi
 # Update hooks
 echo "Updating hooks..."
 mkdir -p "$SCRIPT_DIR/hooks"
-for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh aggressive-pickup.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh aggressive-pickup.sh sessionstart-autoarm-monitor.sh; do
   if curl -fsSL "$SERVER_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/hooks/$hook.new" "$SCRIPT_DIR/hooks/$hook"
     chmod +x "$SCRIPT_DIR/hooks/$hook"
@@ -91,13 +91,15 @@ if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
   MSG_HOOK="$SCRIPT_DIR/hooks/post-message.sh"
   MENTION_HOOK="$SCRIPT_DIR/hooks/on-new-mentions.sh"
   SESSIONSTART_HOOK="$SCRIPT_DIR/hooks/sessionstart-poll.sh"
+  AUTOARM_HOOK="$SCRIPT_DIR/hooks/sessionstart-autoarm-monitor.sh"
   STOP_HOOK="$SCRIPT_DIR/hooks/stop-poll.sh"
   AGGRESSIVE_HOOK="$SCRIPT_DIR/hooks/aggressive-pickup.sh"
   CANONICAL=$(cat <<CANON
 {
   "hooks": {
     "SessionStart": [
-      {"hooks": [{"type": "command", "command": "$SESSIONSTART_HOOK", "timeout": 10}]}
+      {"hooks": [{"type": "command", "command": "$SESSIONSTART_HOOK", "timeout": 10}]},
+      {"hooks": [{"type": "command", "command": "$AUTOARM_HOOK", "timeout": 5}]}
     ],
     "Stop": [
       {"hooks": [{"type": "command", "command": "$STOP_HOOK", "timeout": 10}]}
@@ -147,6 +149,22 @@ for cmd in start.md mention-check.md; do
     rm -f "$COMMANDS_DIR/$cmd.new"
   fi
 done
+
+# Deploy/refresh the sidechat-responder agent (2.6.49 default wake path —
+# the Haiku triage subagent spawned when sidechat-mention-monitor.sh surfaces
+# a MENTION notification). Same $TOKEN-substitution pattern as the CLAUDE.md
+# block below, keyed on $BOT_NAME instead of $SERVER_URL. Always-overwrite:
+# this file has no local-edit surface worth preserving, same rationale as
+# sc-cheatsheet.md.
+AGENTS_DIR="$(dirname "$SCRIPT_DIR")/.claude/agents"
+if [[ -n "${BOT_NAME:-}" ]]; then
+  mkdir -p "$AGENTS_DIR"
+  if RESPONDER=$(curl -fsSL "$SERVER_URL/install/agents/sidechat-responder.md" 2>/dev/null); then
+    RESPONDER="${RESPONDER//\$BOT_NAME/$BOT_NAME}"
+    printf '%s' "$RESPONDER" > "$AGENTS_DIR/sidechat-responder.md"
+    echo "  agents/sidechat-responder.md"
+  fi
+fi
 
 # Refresh the ## SideChat block inside the bot's CLAUDE.md. Pre-2.6.10 this
 # only happened at client.sh install time; existing bots stayed frozen at

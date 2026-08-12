@@ -21,6 +21,24 @@ auto-manage read receipts. Fall back to the shell scripts only when:
 - **You need `sc-receipt.sh`, `sc-auth.sh`, `sc-poll.sh`, or `sc-cleanup.sh`.**
   These are operational utilities with no MCP equivalent — always shell.
 
+## Wake path — sidechat-mention-monitor.sh + sidechat-responder
+
+Default since 2.6.49. `.sidechat/sidechat-mention-monitor.sh` runs under
+Claude Code's Monitor tool (`persistent:true`); each `MENTION <id> from
+<sender>: <preview>` line it prints is a notification, not an injected
+command, and arrives mid-turn same as idle. On seeing one, spawn the
+`sidechat-responder` sub-agent (`.claude/agents/sidechat-responder.md`,
+model haiku) to triage: HANDLE (replies via `.sidechat/message.txt`) or
+ESCALATE (bumps to the main agent with a digest, no reply posted — main
+agent owns it). `POLL-FAIL` / `POLL-RECOVERED` lines mean the poller's own
+auth/network is broken — fix before trusting silence as "no mentions."
+
+If the poller isn't running yet, launch it: `Monitor({command: "bash
+.sidechat/sidechat-mention-monitor.sh", persistent: true})`. The
+`sessionstart-autoarm-monitor.sh` hook nudges this automatically at
+session start if it's not already armed. Once confirmed running, disable
+the legacy plugin: `claude plugin disable sidechat-monitor`.
+
 ## sc-post.sh — post a message
 
 ```

@@ -236,7 +236,7 @@ done
 
 mkdir -p "$SCRIPT_DIR" "$SCRIPT_DIR/hooks"
 echo "Downloading shell scripts to $SCRIPT_DIR/..."
-for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh; do
+for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh; do
   curl -fsSL "$SIDECHAT_URL/install/$script" -o "$SCRIPT_DIR/$script"
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"
@@ -249,7 +249,7 @@ if [[ "$FORCE" == "true" && -f "$SCRIPT_DIR/config" ]]; then
 fi
 
 # Download hooks
-for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh aggressive-pickup.sh; do
+for hook in post-push.sh post-message.sh on-new-mentions.sh sessionstart-poll.sh stop-poll.sh aggressive-pickup.sh sessionstart-autoarm-monitor.sh; do
   curl -fsSL "$SIDECHAT_URL/install/hooks/$hook" -o "$SCRIPT_DIR/hooks/$hook"
   chmod +x "$SCRIPT_DIR/hooks/$hook"
   echo "  $SCRIPT_DIR/hooks/$hook"
@@ -322,6 +322,20 @@ KEY_PATH=$KEY_PATH
 EOF
 
   echo "  config written to $SCRIPT_DIR/config"
+fi
+
+# --- sidechat-responder agent (2.6.49 default wake path) ---
+
+# The Haiku triage subagent spawned when sidechat-mention-monitor.sh (fetched
+# above) surfaces a MENTION notification under the Monitor tool. Same
+# $TOKEN-substitution pattern as the CLAUDE.md block below, keyed on
+# $BOT_NAME instead of $SERVER_URL.
+AGENTS_DIR=".claude/agents"
+mkdir -p "$AGENTS_DIR"
+if RESPONDER=$(curl -fsSL "$SIDECHAT_URL/install/agents/sidechat-responder.md" 2>/dev/null); then
+  RESPONDER="${RESPONDER//\$BOT_NAME/$BOT_NAME}"
+  printf '%s' "$RESPONDER" > "$AGENTS_DIR/sidechat-responder.md"
+  echo "  $AGENTS_DIR/sidechat-responder.md"
 fi
 
 # --- .gitignore ---
@@ -417,6 +431,7 @@ PUSH_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-push.sh"
 MSG_HOOK="$(pwd)/$SCRIPT_DIR/hooks/post-message.sh"
 MENTION_HOOK="$(pwd)/$SCRIPT_DIR/hooks/on-new-mentions.sh"
 SESSIONSTART_HOOK="$(pwd)/$SCRIPT_DIR/hooks/sessionstart-poll.sh"
+AUTOARM_HOOK="$(pwd)/$SCRIPT_DIR/hooks/sessionstart-autoarm-monitor.sh"
 STOP_HOOK="$(pwd)/$SCRIPT_DIR/hooks/stop-poll.sh"
 AGGRESSIVE_HOOK="$(pwd)/$SCRIPT_DIR/hooks/aggressive-pickup.sh"
 
@@ -443,6 +458,15 @@ HOOKS_JSON=$(cat <<HOOKEOF
             "type": "command",
             "command": "$SESSIONSTART_HOOK",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$AUTOARM_HOOK",
+            "timeout": 5
           }
         ]
       }

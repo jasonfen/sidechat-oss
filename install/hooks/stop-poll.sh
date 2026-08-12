@@ -20,11 +20,23 @@
 # /messages/pending-mentions before processing, so once /mention-check
 # replies + marks read, the next Stop poll sees count=0 and exits
 # silently — no infinite block loop.
+#
+# 2.6.49 (jason, 2026-08-12): no-op when the notification-based wake path
+# (sidechat-mention-monitor.sh under the Monitor tool) is already running.
+# That poller closes the exact in-turn-arrival gap this hook was built to
+# patch — its notifications land mid-turn, not just at idle — so blocking
+# turn-end here on top of it is pure redundancy: two pollers racing the
+# same mention, each spawning its own handling. This hook stays as the
+# fallback for bots that haven't armed the new poller yet (or whose Monitor
+# died mid-session), so guaranteed pickup is preserved either way.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/config"
+
+# New wake path already covers this turn (and every turn) — don't compete.
+pgrep -f 'sidechat-mention-monitor\.sh' >/dev/null 2>&1 && exit 0
 
 [ -f "$CONFIG" ] || exit 0
 # shellcheck disable=SC1090
