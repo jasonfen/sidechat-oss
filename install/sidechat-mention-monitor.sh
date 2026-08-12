@@ -96,15 +96,24 @@ check_version() {
 # alive on the new path). Best-effort: a failed heartbeat POST must never
 # take down the mention loop itself, so errors are swallowed. No
 # last_inject_ms — this path never injects, matching the dashboard's
-# existing "null on non-tmux installs" handling. plugin_version carries a
-# clearly-non-plugin marker so it reads as this wake path, not a
-# stale/mismatched plugin release, at a glance in that column.
+# existing "null on non-tmux installs" handling.
+#
+# 2026-08-12: plugin_version carries "mention-monitor vX.Y.Z" (this bot's
+# real sc-version.txt), not a bare hardcoded marker as first shipped in
+# 2.6.52 — jason flagged that the original marker made every bot's dashboard
+# entry read identically, losing the version-drift-at-a-glance visibility
+# the old plugin's raw version number gave (e.g. "0.1.10" vs "0.1.9"). The
+# "mention-monitor" prefix is kept so the column still reads as this wake
+# path rather than a legacy plugin release at a glance; the version suffix
+# restores the drift signal, now against the actual client version instead
+# of a plugin-specific one.
 send_heartbeat() {
   local queue_size="$1"
   local now_ms=$(( $(date +%s) * 1000 ))
+  local ver; ver=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null || echo "?")
   curl -fsS --max-time 5 -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
-    -d "$(jq -cn --argjson t "$now_ms" --argjson q "$queue_size" \
-      '{last_poll_ms: $t, queue_size: $q, plugin_version: "mention-monitor"}')" \
+    -d "$(jq -cn --argjson t "$now_ms" --argjson q "$queue_size" --arg v "mention-monitor v${ver}" \
+      '{last_poll_ms: $t, queue_size: $q, plugin_version: $v}')" \
     "${SERVER_URL}/bots/heartbeat" >/dev/null 2>&1 || true
 }
 
