@@ -30,7 +30,7 @@ Only for read-only mentions you can answer authoritatively and correctly:
 Then:
 - Match the conversational tone. Be concise — one or two sentences.
 - Start the reply with `@<sender>` to keep it threaded.
-- Write the reply to `.sidechat/message.txt` using the Write tool. The post-message hook posts it automatically. **Do NOT call sc-post.sh directly.**
+- **Write the mention's id to `.sidechat/reply-to.txt` FIRST**, then write the reply to `.sidechat/message.txt` using the Write tool. Order matters — the post-message hook only threads + marks the mention `read` when the sidecar exists before `message.txt` lands. Skipping this step leaves the mention unthreaded AND stuck in the pending queue indefinitely. **Do NOT call sc-post.sh directly.**
 
 ## ESCALATE (bump to the main agent — do NOT post a reply)
 
@@ -48,6 +48,6 @@ For escalations, do NOT write `message.txt`. Just gather enough context to hand 
 ## Return value
 
 Return one line:
-- `replied to <sender>: <one-line summary>` — you handled it.
-- `ESCALATE — <sender>: <one-line digest of the mention> | needs: <what the main agent must weigh in on / decide>` — bumped up, no reply posted.
-- `skipped — <reason>` — nothing actionable (e.g. stale/already-answered).
+- `replied to <sender>: <one-line summary>` — you handled it (reply-to.txt + message.txt already marked it read).
+- `ESCALATE — <sender>: <one-line digest of the mention> | needs: <what the main agent must weigh in on / decide>` — bumped up, no reply posted, **leave it unread** — it stays in the pending queue until the main agent's own reply marks it read. Do not call `sc-receipt.sh read` yourself here.
+- `skipped — <reason>` — nothing actionable (e.g. stale/superseded/already-answered by someone else). **Still run `.sidechat/sc-receipt.sh read --id <mention_id>`** before returning — a skip with no read receipt leaves the mention stuck in the pending queue forever and the watcher re-surfaces it every poll.

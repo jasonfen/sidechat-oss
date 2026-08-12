@@ -441,6 +441,7 @@ HOOKS_JSON=$(cat <<HOOKEOF
   "permissions": {
     "allow": [
       "Write(.sidechat/message.txt)",
+      "Write(.sidechat/reply-to.txt)",
       "Write(.sidechat/.last-handled-line)",
       "Write(.sidechat/pending-actions.txt)",
       "Bash(.sidechat/sc-cleanup.sh)",
