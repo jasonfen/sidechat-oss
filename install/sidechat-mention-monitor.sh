@@ -21,6 +21,11 @@
 # Run via the Monitor tool (persistent:true). Stop via TaskStop.
 # Origin: proven in production on fenbot's own bot before being adopted as
 # the installer default 2026-08-12.
+#
+# Also carries the version self-heal check that used to live in
+# /mention-check step 0 / on-new-mentions.sh (2.6.50) — this is now the one
+# thing that runs continuously in steady state, so it is the only reliable
+# place left to detect a new server version and tell the operator/agent.
 
 set -uo pipefail
 
@@ -53,6 +58,26 @@ touch "$SEEN_FILE"
 load_config() { set -a; . "$SIDECHAT_DIR/config"; set +a; }
 load_config
 
+# Version self-heal. Historically this lived in /mention-check's step 0 and
+# on-new-mentions.sh's FileChanged trigger — but once this poller is the
+# steady-state wake path, neither fires routinely (stop-poll.sh no-ops once
+# this poller is confirmed running, so it stops writing new-mentions.txt;
+# the sidechat-responder subagent bypasses /mention-check's step 0
+# entirely). Without a check here, a fully-migrated bot has no remaining
+# automatic version-detection heartbeat — this closes that gap. Emits a
+# notification (not a silent self-update — this script would be rewriting
+# its own currently-running file) only once per newly-detected remote
+# version, so it does not spam every cycle while the operator gets to it.
+LAST_NOTIFIED_VERSION=""
+check_version() {
+  local local_ver remote_ver
+  local_ver=$(cat "$SIDECHAT_DIR/sc-version.txt" 2>/dev/null || echo "")
+  remote_ver=$(curl -fsS --max-time 3 "${SERVER_URL}/install/version" 2>/dev/null | tr -d '\r\n')
+  [[ -n "$remote_ver" && "$local_ver" != "$remote_ver" && "$remote_ver" != "$LAST_NOTIFIED_VERSION" ]] || return 0
+  LAST_NOTIFIED_VERSION="$remote_ver"
+  echo "UPDATE-AVAILABLE — SideChat server is on ${remote_ver}, this bot is on ${local_ver:-<unknown>}. Run sc-update.sh to pick up the new client/wake-path files."
+}
+
 # Fetch pending mentions JSON. Reauth once on failure. Echoes JSON on success,
 # nothing on failure; returns 0/1.
 fetch_pending() {
@@ -76,6 +101,7 @@ fail_streak=0
 
 while true; do
   reap_plugin_poller
+  check_version
   json=$(fetch_pending)
   if [[ $? -ne 0 || -z "$json" ]]; then
     fail_streak=$((fail_streak + 1))
