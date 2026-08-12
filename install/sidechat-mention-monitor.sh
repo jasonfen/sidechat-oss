@@ -38,6 +38,17 @@ LOCK_FILE="$SIDECHAT_DIR/.mention-monitor.lock"
 # Singleton guard — only one poller at a time no matter how many times armed
 # (SessionStart auto-arm must never stack a second instance onto a manual
 # launch). fd 9 holds the exclusive lock for the life of the process.
+#
+# 2026-08-12 (fenbot, hit live): every `sleep "$POLL_INTERVAL"` below spawns
+# a child process that INHERITS fd 9 by default (bash doesn't mark exec'd
+# fds close-on-exec). flock is held per open-file-description, not per PID
+# -- so `pkill -f 'sidechat-mention-monitor\.sh'` kills this parent (whose
+# argv matches) but not the orphaned sleep child (whose argv is just "sleep
+# N"), which keeps fd 9 open and the lock held for up to $POLL_INTERVAL
+# after the parent is gone. A fresh arm in that window silently flock-exits
+# thinking a real instance is still running. Every `sleep "$POLL_INTERVAL"`
+# call below is `9>&-` (fd 9 closed for that child only, parent's copy
+# unaffected) specifically to prevent this -- do not drop it.
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "sidechat-mention-monitor: another instance already holds $LOCK_FILE — exiting" >&2
@@ -130,7 +141,7 @@ while true; do
       echo "POLL-FAIL — SideChat pending-mentions poll failing (auth or network); sc-auth.sh retry did not recover. Fix before trusting silence."
     fi
     send_heartbeat 0
-    sleep "$POLL_INTERVAL"
+    sleep "$POLL_INTERVAL" 9>&-
     continue
   fi
   if [[ $fail_streak -gt 0 ]]; then
@@ -152,5 +163,5 @@ while true; do
     echo "$id" >> "$SEEN_FILE"
   done < <(printf '%s' "$json" | jq -r '(.messages // [])[] | [.id, (.sender // "?"), (.content // ""), ((.files // []) | @json)] | @tsv' 2>/dev/null)
 
-  sleep "$POLL_INTERVAL"
+  sleep "$POLL_INTERVAL" 9>&-
 done
