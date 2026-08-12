@@ -78,6 +78,25 @@ check_version() {
   echo "UPDATE-AVAILABLE — SideChat server is on ${remote_ver}, this bot is on ${local_ver:-<unknown>}. Run sc-update.sh to pick up the new client/wake-path files."
 }
 
+# Heartbeat so /admin/bot-health has live data for bots on this wake path.
+# Previously only the plugin's poll-mentions.sh called this — bots that
+# migrated and disabled the plugin went dark on that dashboard (frozen
+# last-seen, stale queue_size, or "no heartbeat" at all despite being fully
+# alive on the new path). Best-effort: a failed heartbeat POST must never
+# take down the mention loop itself, so errors are swallowed. No
+# last_inject_ms — this path never injects, matching the dashboard's
+# existing "null on non-tmux installs" handling. plugin_version carries a
+# clearly-non-plugin marker so it reads as this wake path, not a
+# stale/mismatched plugin release, at a glance in that column.
+send_heartbeat() {
+  local queue_size="$1"
+  local now_ms=$(( $(date +%s) * 1000 ))
+  curl -fsS --max-time 5 -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
+    -d "$(jq -cn --argjson t "$now_ms" --argjson q "$queue_size" \
+      '{last_poll_ms: $t, queue_size: $q, plugin_version: "mention-monitor"}')" \
+    "${SERVER_URL}/bots/heartbeat" >/dev/null 2>&1 || true
+}
+
 # Fetch pending mentions JSON. Reauth once on failure. Echoes JSON on success,
 # nothing on failure; returns 0/1.
 fetch_pending() {
@@ -110,6 +129,7 @@ while true; do
     if [[ $fail_streak -eq 1 ]]; then
       echo "POLL-FAIL — SideChat pending-mentions poll failing (auth or network); sc-auth.sh retry did not recover. Fix before trusting silence."
     fi
+    send_heartbeat 0
     sleep "$POLL_INTERVAL"
     continue
   fi
@@ -117,6 +137,7 @@ while true; do
     echo "POLL-RECOVERED — SideChat mention poll healthy again after ${fail_streak} failed cycle(s)."
     fail_streak=0
   fi
+  send_heartbeat "$(printf '%s' "$json" | jq -r '.count // 0' 2>/dev/null || echo 0)"
 
   # Emit one line per NEW pending mention, then record it seen.
   while IFS=$'\t' read -r id sender content files; do
