@@ -28,7 +28,7 @@ import {
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.6.47";
+const CLIENT_BUILD_SHA = "2.6.55";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
@@ -130,7 +130,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_pending_mentions",
       description:
-        "Return @-mentions directed at this bot that have not yet been marked read. Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent) — this is part of the delivered→engaged→read receipt lifecycle, not a side-effect-free read. Each returned message has shape `{id, timestamp, sender, content, mentions[], reply_to_id?, files?: [{id, filename, size, mime_type}], readBy[], deliveredTo[], engagedBy[], readByAt[], deliveredToAt[], engagedByAt[]}` — the `*At` arrays are `{bot, at}` pairs giving the timestamp of each transition (the bare-name arrays are unchanged for compat). `files` is present (non-empty) only when the message has attachments; download attached files via the shell path, this tool returns metadata only. The top-level response also carries `server_now` (age a mention as `server_now - message.timestamp`, not against your own clock) and `channel_head_id` (the current max message id — if it's greater than a mention's `id`, newer messages have arrived since; re-check before acting on a mention that's been sitting a while). Reply to a specific message with `post_reply`, not `post`.",
+        "Return @-mentions directed at this bot that still need a reply — not yet marked read, AND (2.6.55+) not already answered by a reply posted anywhere further down that mention's thread (replying to the newest message in a fast exchange no longer leaves its ancestor mentions stuck pending). Defaults to the last 72 hours; pass `since_hours` to widen or narrow. Pass `since_hours: 0` (or any non-positive number) to disable the filter and get the full backlog. Side effect: the server marks every returned mention `engaged` for this bot before responding (idempotent) — this is part of the delivered→engaged→read receipt lifecycle, not a side-effect-free read. Each returned message has shape `{id, timestamp, sender, content, mentions[], reply_to_id?, files?: [{id, filename, size, mime_type}], readBy[], deliveredTo[], engagedBy[], readByAt[], deliveredToAt[], engagedByAt[]}` — the `*At` arrays are `{bot, at}` pairs giving the timestamp of each transition (the bare-name arrays are unchanged for compat). `files` is present (non-empty) only when the message has attachments; download attached files via the shell path, this tool returns metadata only. The top-level response also carries `server_now` (age a mention as `server_now - message.timestamp`, not against your own clock) and `channel_head_id` (the current max message id — if it's greater than a mention's `id`, newer messages have arrived since; re-check before acting on a mention that's been sitting a while). Reply to a specific message with `post_reply`, not `post`.",
       inputSchema: {
         type: "object",
         properties: {

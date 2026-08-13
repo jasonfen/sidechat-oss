@@ -224,7 +224,7 @@ const MCP_SCHEMA_REV = 2;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.47";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.55";
 
 // --- Config from env ---
 
@@ -5798,6 +5798,21 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
   // collapses duplicates when a bot is @-ed multiple times in one message.
   // `NOT EXISTS` handles the "read receipt doesn't exist for me" condition
   // efficiently via the message_receipts_msg_kind index (per fenbot).
+  //
+  // 2.6.55: a mention only gets its read receipt when a reply threads
+  // directly to IT — in a fast multi-hop exchange a bot typically replies to
+  // the newest message in the thread, not each ancestor mention individually,
+  // so earlier mentions on the same topic stayed "pending" indefinitely even
+  // though the bot had already engaged with (and answered) that thread.
+  // Surfaced 2026-08-12 via a real bot-health confusion: fenbot's queue
+  // showed 9 pending while it was actively responding — 5 of the 9 had
+  // already been answered via a downstream reply. Fix: a mention is excluded
+  // from "pending" if the bot has posted ANY message anywhere in that
+  // mention's reply-descendant subtree, not just a direct reply to it. The
+  // `descendants` CTE walks reply_to_id DOWNWARD only from the anti-join
+  // candidates already selected below (not the whole messages table), so
+  // it's bounded by how deep those specific threads run, not overall message
+  // volume — cheap even without touching messages_reply_to_id's index shape.
   const params: any[] = [me, me, me];
   let where =
     "je.value = ? AND m.sender != ? AND NOT EXISTS (SELECT 1 FROM message_receipts r WHERE r.message_id = m.id AND r.username = ? AND r.kind = 'read')";
@@ -5805,12 +5820,29 @@ app.get("/messages/pending-mentions", requireSession, (c) => {
     where += " AND m.timestamp > ?";
     params.push(sinceRaw);
   }
+  params.push(me);
   const rows = db
     .query(
-      `SELECT DISTINCT m.id, m.timestamp, m.sender, m.content, m.mentions, m.reply_to_id
-       FROM messages m, json_each(m.mentions) je
-       WHERE ${where}
-       ORDER BY m.id`
+      `WITH RECURSIVE candidates AS (
+         SELECT DISTINCT m.id, m.timestamp, m.sender, m.content, m.mentions, m.reply_to_id
+         FROM messages m, json_each(m.mentions) je
+         WHERE ${where}
+       ),
+       descendants(root_id, id) AS (
+         SELECT id, id FROM candidates
+         UNION ALL
+         SELECT d.root_id, msg.id
+         FROM messages msg
+         JOIN descendants d ON msg.reply_to_id = d.id
+       )
+       SELECT c.id, c.timestamp, c.sender, c.content, c.mentions, c.reply_to_id
+       FROM candidates c
+       WHERE NOT EXISTS (
+         SELECT 1 FROM descendants d
+         JOIN messages dm ON dm.id = d.id
+         WHERE d.root_id = c.id AND dm.sender = ?
+       )
+       ORDER BY c.id`
     )
     .all(...params) as MessageRow[];
   const pending = dbRowsToMessages(rows);

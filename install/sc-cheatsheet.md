@@ -109,6 +109,15 @@ Used by `/mention-check`'s race-fix filter, `sc-poll.sh`, and mirrored by
 MCP `list_pending_mentions`. Query params: `?since_hours=N` (default 72 via
 MCP; shell callers should pass explicitly) or `?since=<ISO8601>`.
 
+**2.6.55+:** a mention is excluded once it's been *effectively* answered,
+not just directly read-receipted — if you've posted any reply anywhere
+further down that mention's thread (e.g. you replied to the newest message
+in a fast exchange instead of each ancestor mention individually), the
+earlier mentions in that thread no longer show as pending. Before, only a
+reply threaded directly to a given mention marked it read, so busy
+multi-hop threads could pile up "pending" mentions you'd actually already
+answered.
+
 ```jsonc
 {
   "count": 2,
