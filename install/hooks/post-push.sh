@@ -1,29 +1,79 @@
 #!/usr/bin/env bash
-# Hook: post sidechat status after git push
-# Triggered by Claude Code PostToolUse on Bash
-
+# Hook: post sidechat status after a real `git push`.
+#
+# Detects the push from its actual output (the `<old>..<new>  branch ->
+# branch` ref-update line git prints) rather than pattern-matching the
+# command text. The old command-text guard (`^\s*git\s+push`) had two
+# real failure modes: (1) any multi-line command that merely *mentioned*
+# "git push" somewhere — a heredoc, a comment — matched, since grep
+# checked the whole string line-by-line, not just the executed command;
+# (2) on a host running the rtk proxy (which rewrites `git push` to
+# `rtk git push` transparently), the anchored pattern never matched at
+# all, so pushes silently stopped posting. Keying off the ref-update line
+# in tool_response sidesteps both: text that only mentions a push never
+# produces one, and the rewritten command still shows real push output.
+#
+# Directory resolution had a matching bug: `git log -1` ran in the hook's
+# own cwd, which is the *session's* cwd, not necessarily where the push
+# actually happened if the command did an inline `cd` first — so a push
+# from another repo reported an unrelated, confidently-wrong commit. Fix:
+# verify a resolved directory actually contains the pushed SHA before
+# trusting it for the commit-message lookup; if no candidate directory
+# checks out, still post the SHA (from the push output itself, so it's
+# never wrong) without a message rather than guessing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SC_POST="$SCRIPT_DIR/../sc-post.sh"
 
-# Read hook input from stdin
 INPUT=$(cat)
-
-# Extract the command that was run
+HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+OUTPUT=$(echo "$INPUT" | jq -r '(.tool_response.stdout // "") + "\n" + (.tool_response.stderr // "")')
 
-# Only act on git push commands
-if ! echo "$COMMAND" | grep -qE '^\s*git\s+push'; then
-  exit 0
+# Require the command to at least mention "push" as a loose pre-filter
+# (cheap, avoids running the heavier match below on unrelated commands)
+# AND the output to contain a genuine-looking ref-update line. Only the
+# existing-branch form (has an old..new SHA range) is handled — a brand
+# new branch's first push (`* [new branch]  x -> x`) has no SHA to key
+# off, and force-push/delete forms are ambiguous enough to skip rather
+# than guess.
+echo "$COMMAND" | grep -qi 'push' || exit 0
+REF_LINE=$(echo "$OUTPUT" | grep -E '^[[:space:]]*[0-9a-f]{7,40}\.\.[0-9a-f]{7,40}[[:space:]]+[^[:space:]]+[[:space:]]+->[[:space:]]+[^[:space:]]+[[:space:]]*$' | head -1 || true)
+[[ -z "$REF_LINE" ]] && exit 0
+
+NEWSHA=$(echo "$REF_LINE" | sed -E 's/^[[:space:]]*[0-9a-f]+\.\.([0-9a-f]+).*/\1/')
+BRANCH=$(echo "$REF_LINE" | sed -E 's/.*->[[:space:]]+([^[:space:]]+)[[:space:]]*$/\1/')
+
+# Try the hook's own cwd first, then fall back to an inline `cd <dir>`
+# pulled from the command — but only trust a directory once we've
+# confirmed it actually contains the pushed commit.
+resolve_dir() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  if git -C "$dir" cat-file -e "$NEWSHA" 2>/dev/null; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+TARGET_DIR=""
+if resolve_dir "$HOOK_CWD"; then
+  TARGET_DIR="$HOOK_CWD"
+else
+  CD_DIR=$(echo "$COMMAND" | grep -oE 'cd[[:space:]]+[^&;|]+' | tail -1 | sed -E 's/^cd[[:space:]]+//; s/[[:space:]]+$//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//' || true)
+  if [[ -n "$CD_DIR" ]]; then
+    [[ "$CD_DIR" != /* ]] && CD_DIR="$HOOK_CWD/$CD_DIR"
+    resolve_dir "$CD_DIR" && TARGET_DIR="$CD_DIR"
+  fi
 fi
 
-# Get the latest commit info
-HASH=$(git log -1 --format='%h' 2>/dev/null || echo "")
-MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
-
-if [[ -z "$HASH" || -z "$MSG" ]]; then
-  exit 0
+HASH=$(echo "$NEWSHA" | cut -c1-7)
+if [[ -n "$TARGET_DIR" ]]; then
+  MSG=$(git -C "$TARGET_DIR" log -1 --format='%s' "$NEWSHA" 2>/dev/null || echo "")
+else
+  MSG=""
 fi
 
 # Run synchronously (not backgrounded). PostToolUse hooks fire after the
@@ -33,6 +83,10 @@ fi
 # finished by the time the parent hook exited, the orphaned child could get
 # reaped mid-flight with zero trace (all output was silently swallowed).
 # Well within the hook's 10s timeout for a plain POST.
-"$SC_POST" "Pushed $HASH — $MSG" >/dev/null 2>&1
+if [[ -n "$MSG" ]]; then
+  "$SC_POST" "Pushed $HASH — $MSG" >/dev/null 2>&1
+else
+  "$SC_POST" "Pushed $HASH to $BRANCH" >/dev/null 2>&1
+fi
 
 exit 0
