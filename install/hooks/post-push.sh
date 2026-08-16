@@ -45,9 +45,12 @@ REF_LINE=$(echo "$OUTPUT" | grep -E '^[[:space:]]*[0-9a-f]{7,40}\.\.[0-9a-f]{7,4
 NEWSHA=$(echo "$REF_LINE" | sed -E 's/^[[:space:]]*[0-9a-f]+\.\.([0-9a-f]+).*/\1/')
 BRANCH=$(echo "$REF_LINE" | sed -E 's/.*->[[:space:]]+([^[:space:]]+)[[:space:]]*$/\1/')
 
-# Try the hook's own cwd first, then fall back to an inline `cd <dir>`
-# pulled from the command — but only trust a directory once we've
-# confirmed it actually contains the pushed commit.
+# Try the hook's own cwd first, then any `cd <dir>` or `git -C <dir>`
+# candidate pulled from the command (either form, in whatever order they
+# appear — the SHA check below is what actually picks the right one, so
+# extraction order isn't load-bearing). Anchored to a command boundary so
+# a word merely ending in "cd" (e.g. `abcd /etc`) can't match. Only trust
+# a directory once we've confirmed it actually contains the pushed commit.
 resolve_dir() {
   local dir="$1"
   [[ -n "$dir" && -d "$dir" ]] || return 1
@@ -62,11 +65,18 @@ TARGET_DIR=""
 if resolve_dir "$HOOK_CWD"; then
   TARGET_DIR="$HOOK_CWD"
 else
-  CD_DIR=$(echo "$COMMAND" | grep -oE 'cd[[:space:]]+[^&;|]+' | tail -1 | sed -E 's/^cd[[:space:]]+//; s/[[:space:]]+$//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//' || true)
-  if [[ -n "$CD_DIR" ]]; then
-    [[ "$CD_DIR" != /* ]] && CD_DIR="$HOOK_CWD/$CD_DIR"
-    resolve_dir "$CD_DIR" && TARGET_DIR="$CD_DIR"
-  fi
+  while IFS= read -r CAND_DIR; do
+    [[ -z "$CAND_DIR" ]] && continue
+    [[ "$CAND_DIR" != /* ]] && CAND_DIR="$HOOK_CWD/$CAND_DIR"
+    if resolve_dir "$CAND_DIR"; then
+      TARGET_DIR="$CAND_DIR"
+      break
+    fi
+  done < <(echo "$COMMAND" \
+    | grep -oE '(^|[[:space:]]|[&;|])(cd|git[[:space:]]+-C)[[:space:]]+("[^"]+"|'"'"'[^'"'"']+'"'"'|[^[:space:]&;|]+)' \
+    | sed -E 's/^[[:space:]&;|]*//; s/^cd[[:space:]]+//; s/^git[[:space:]]+-C[[:space:]]+//' \
+    | sed -E 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//' \
+    | sed -E 's/[[:space:]]+$//')
 fi
 
 HASH=$(echo "$NEWSHA" | cut -c1-7)
