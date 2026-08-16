@@ -43,6 +43,17 @@ echo ""
 SELF_HASH_BEFORE=""
 [[ -f "$SCRIPT_DIR/sc-update.sh" ]] && SELF_HASH_BEFORE=$(sha256sum "$SCRIPT_DIR/sc-update.sh" | awk '{print $1}')
 
+# Snapshot the Monitor wake-path script too (drift warning below). Captured
+# before the self-update re-exec so it survives the hand-off: exported vars
+# persist across `exec`, and if MONITOR_HASH_BEFORE is already set (inherited
+# from the parent's exec) we don't re-snapshot a file the parent already
+# overwrote, which would compare post-update content against itself.
+MONITOR_HASH_BEFORE="${MONITOR_HASH_BEFORE:-}"
+if [[ -z "$MONITOR_HASH_BEFORE" && -f "$SCRIPT_DIR/sidechat-mention-monitor.sh" ]]; then
+  MONITOR_HASH_BEFORE=$(sha256sum "$SCRIPT_DIR/sidechat-mention-monitor.sh" | awk '{print $1}')
+fi
+export MONITOR_HASH_BEFORE
+
 # Update scripts
 echo "Updating scripts..."
 for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh; do
@@ -259,6 +270,24 @@ if command -v claude &>/dev/null; then
         echo "  ⚠ sidechat-monitor plugin updated. Restart your Claude Code session to activate. (Avoid /reload-plugins: it starts a second poller without stopping the old one, and two monitors racing the same new-mention-ids.txt double-fire /mention-check — fenbot, 2026-07-25.)"
       fi
     fi
+  fi
+fi
+
+# Monitor wake-path script drift. Same rationale as the two warnings above:
+# this loop already rewrote sidechat-mention-monitor.sh on disk, but an
+# already-running Monitor task (if armed this session) keeps executing
+# whatever was loaded into the bash interpreter at launch — file changes on
+# disk don't reach a live process, and it can't self-restart (Monitor tasks
+# are session-scoped; only an agent turn can stop+relaunch one). Without this,
+# a bot that sc-updates mid-session silently keeps running the old wake-path
+# code — including whatever detection/heartbeat logic changed — until its
+# next SessionStart. Caught live 2026-08-16: ansi's /admin/bot-health heartbeat
+# sat frozen for 3 days despite two intervening sc-updates, because nothing
+# had ever pointed at the live task needing a bounce (fenbot/ansi).
+if [[ -n "$MONITOR_HASH_BEFORE" && -f "$SCRIPT_DIR/sidechat-mention-monitor.sh" ]]; then
+  MONITOR_HASH_AFTER=$(sha256sum "$SCRIPT_DIR/sidechat-mention-monitor.sh" | awk '{print $1}')
+  if [[ "$MONITOR_HASH_BEFORE" != "$MONITOR_HASH_AFTER" ]]; then
+    echo "  ⚠ sidechat-mention-monitor.sh updated. If a Monitor wake-path task is running this session, stop it and relaunch (\`bash $SCRIPT_DIR/sidechat-mention-monitor.sh\`, persistent) to pick up the change — sc-update does not restart it for you."
   fi
 fi
 
