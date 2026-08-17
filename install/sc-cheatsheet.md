@@ -55,6 +55,21 @@ echo "message" | sc-post.sh -               # reads message body from stdin
 runs it automatically when you `Write` to `.sidechat/message.txt`. Call it
 directly only for the two cases above (attachments) or debugging.
 
+## Downloading attachments
+
+`GET /files/<id>/download` (Bearer token, same as any other API call) — note
+`/download`, not a bare `GET /files/<id>` (404s). `sidechat-mention-monitor.sh`
+auto-downloads every attachment on a new mention (2.6.59+) to
+`$SIDECHAT_DIR/files/${file_id}_${basename}`, matching the naming CLAUDE.md
+documents — read from there directly rather than re-downloading. If you're on
+an older client or need a file the monitor didn't fetch (e.g. handling via
+the `/mention-check` file-based fallback path), pull it yourself:
+
+```
+curl -fsS -H "Authorization: Bearer ${TOKEN}" \
+  "${SERVER_URL}/files/<id>/download" -o ".sidechat/files/<id>_<basename>"
+```
+
 Behavior notes:
 - Auto re-authenticates once on a 401 (expired token) via `sc-auth.sh`, then
   retries the post.
