@@ -35,6 +35,13 @@ if [ "$COUNT" -gt 0 ]; then
     .messages[] | "[\(.timestamp | sub("T"; " ") | sub("\\..*Z$"; ""))] \(.sender): \(.content)"
   ' > "$SCRIPT_DIR/new-mentions.txt"
   printf '%s' "$RESPONSE" | jq -r '.messages[].id' > "$SCRIPT_DIR/new-mention-ids.txt"
+  # Download attachments before this response's file info is gone —  the
+  # flatten above drops .files entirely, and it's the only copy of $RESPONSE
+  # this hook has. Closes the fallback-path half of the gap fixed for the
+  # Monitor path in 2.6.59 (mention 4086) — this hook is one of the producers
+  # that feeds /mention-check via new-mentions.txt.
+  printf '%s' "$RESPONSE" | jq -c '[.messages[].files[]?]' \
+    | SIDECHAT_DIR="$SCRIPT_DIR" TOKEN="$TOKEN" SERVER_URL="$SERVER_URL" "$SCRIPT_DIR/download-attachments.sh"
 fi
 
 # Always surface bot identity so a fresh session doesn't infer from cwd/repo

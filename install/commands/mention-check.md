@@ -81,6 +81,14 @@ delivered→engaged→read receipt table), see `$SIDECHAT_DIR/sc-cheatsheet.md`.
      PR=$(curl -fsS --max-time 5 -H "Authorization: Bearer ${TOKEN:-}" \
        "$SERVER_URL/messages/pending-mentions?since_hours=${SIDECHAT_POLL_HOURS:-72}" 2>/dev/null || true)
      if [ -n "$PR" ]; then
+       # Download attachments from every currently-pending mention (not just
+       # the ones surviving this run's filter below) — file info doesn't
+       # survive the flatten-to-text steps in this script or in
+       # sessionstart-poll.sh/stop-poll.sh, and $PR is the only point in the
+       # fallback path holding the raw JSON. Closes mention 4086's
+       # fallback-path half (the Monitor path was fixed in 2.6.59).
+       printf '%s' "$PR" | jq -c '[.messages[].files[]?]' \
+         | SIDECHAT_DIR="$SIDECHAT_DIR" TOKEN="${TOKEN:-}" SERVER_URL="$SERVER_URL" "$SIDECHAT_DIR/download-attachments.sh"
        SP=$(printf '%s' "$PR" | jq -r '(.messages // [])[].id' 2>/dev/null | sort -u)
        QU=$(sort -u "$SIDECHAT_DIR/processing-mention-ids.txt")
        if [ -z "$SP" ]; then KEEP=""; else KEEP=$(comm -12 <(printf '%s\n' "$SP") <(printf '%s\n' "$QU")); fi

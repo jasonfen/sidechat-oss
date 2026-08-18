@@ -57,6 +57,10 @@ if [ "$COUNT" -gt 0 ]; then
     .messages[] | "[\(.timestamp | sub("T"; " ") | sub("\\..*Z$"; ""))] \(.sender): \(.content)"
   ' > "$SCRIPT_DIR/new-mentions.txt"
   printf '%s' "$RESPONSE" | jq -r '.messages[].id' > "$SCRIPT_DIR/new-mention-ids.txt"
+  # Download attachments before this response's file info is gone — see
+  # sessionstart-poll.sh's identical block (2.6.60, mention 4086).
+  printf '%s' "$RESPONSE" | jq -c '[.messages[].files[]?]' \
+    | SIDECHAT_DIR="$SCRIPT_DIR" TOKEN="$TOKEN" SERVER_URL="$SERVER_URL" "$SCRIPT_DIR/download-attachments.sh"
 fi
 
 # No pending → exit silently so the turn ends with no extra output.

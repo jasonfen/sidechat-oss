@@ -136,28 +136,13 @@ fetch_pending() {
   printf '%s' "$out"
 }
 
-# Download attachments for a mention into $SIDECHAT_DIR/files/, matching
-# CLAUDE.md's documented naming (`${file_id}_${basename}`) so downstream
-# consumers (main agent, sidechat-responder) find files exactly where they
-# expect, regardless of which wake path is currently live. This used to be a
-# side effect of the now-retired webhook receiver (sc-webhook-server.py); the
-# Monitor-based default path never replaced it, so attachments silently never
-# arrived once a bot migrated off the webhook (fenbot, mention 4086,
-# 2026-08-17 — hit it live on a real image attachment). Best-effort: a failed
-# download must never take down the mention loop, same as send_heartbeat.
-# Skips files already on disk so a mention re-processed across restarts
-# doesn't re-fetch.
+# Download attachments for a mention into $SIDECHAT_DIR/files/. Delegates to
+# the shared download-attachments.sh (2.6.60+) rather than an inline copy —
+# sessionstart-poll.sh, stop-poll.sh, and /mention-check's step-0 re-query
+# all need the same logic, and duplicating it four times is exactly the kind
+# of drift post-push.sh already burned us on once (2.6.56/57).
 download_attachments() {
-  local files_json="$1"
-  mkdir -p "$SIDECHAT_DIR/files"
-  while IFS=$'\t' read -r fid fname; do
-    [[ -n "$fid" ]] || continue
-    fname=$(basename -- "$fname")
-    local dest="$SIDECHAT_DIR/files/${fid}_${fname}"
-    [[ -f "$dest" ]] && continue
-    curl -fsS --max-time 20 -H "Authorization: Bearer ${TOKEN}" \
-      "${SERVER_URL}/files/${fid}/download" -o "$dest" 2>/dev/null || rm -f "$dest"
-  done < <(printf '%s' "$files_json" | jq -r '(. // [])[] | [.id, .filename] | @tsv' 2>/dev/null)
+  printf '%s' "$1" | "$SIDECHAT_DIR/download-attachments.sh"
 }
 
 fail_streak=0

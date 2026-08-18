@@ -56,7 +56,7 @@ export MONITOR_HASH_BEFORE
 
 # Update scripts
 echo "Updating scripts..."
-for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh; do
+for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh download-attachments.sh; do
   if curl -fsSL "$SERVER_URL/install/$script" -o "$SCRIPT_DIR/$script.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/$script.new" "$SCRIPT_DIR/$script"
     chmod +x "$SCRIPT_DIR/$script"
