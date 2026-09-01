@@ -16,7 +16,7 @@ else
 fi
 
 do_poll() {
-  curl -s -w "\n%{http_code}" \
+  curl -s --max-time 10 -w "\n%{http_code}" \
     -H "Authorization: Bearer $TOKEN" \
     "$URL"
 }
