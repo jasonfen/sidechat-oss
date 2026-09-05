@@ -155,7 +155,7 @@ while true; do
     fail_streak=$((fail_streak + 1))
     # Emit once on entering a failure streak — auth broken must NOT masquerade
     # as "no mentions" (the silent-failure trap).
-    if [[ $fail_streak -eq 1 ]]; then
+    if [[ $fail_streak -eq 3 ]]; then
       echo "POLL-FAIL — SideChat pending-mentions poll failing (auth or network); sc-auth.sh retry did not recover. Fix before trusting silence."
     fi
     send_heartbeat 0
