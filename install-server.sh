@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/jasonfen/sidechat-oss/main/install-server.sh | bash
 #   --docker      install via Docker Compose (pulls ghcr.io/jasonfen/sidechat-oss:latest)
 #   --bun         install via bun+systemd (clones repo, runs locally)
-#   (no flag)     auto: Docker if `docker compose` is present and bun isn't, else bun
+#   (no flag)     auto: Docker if `docker compose` is present, else bun
 
 SIDECHAT_DIR="${SIDECHAT_DIR:-/opt/sidechat}"
 REPO_URL="https://github.com/jasonfen/sidechat-oss.git"
