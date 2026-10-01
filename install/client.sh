@@ -21,6 +21,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Kill anything holding port 7777 (the webhook listener). Prefers lsof, which
+# works the same way on Linux and macOS; falls back to fuser -k, whose
+# port/proto syntax (e.g. `7777/tcp`) is GNU/psmisc-only — BSD fuser (macOS)
+# doesn't understand it and just prints its usage banner.
+kill_port_7777() {
+  if command -v lsof &>/dev/null; then
+    local pids
+    pids=$(lsof -ti tcp:7777 2>/dev/null || true)
+    [[ -n "$pids" ]] && kill $pids 2>/dev/null && return 0 || return 1
+  elif command -v fuser &>/dev/null; then
+    fuser -k 7777/tcp 2>/dev/null && return 0 || return 1
+  fi
+  return 1
+}
+
 # --- Uninstall path --------------------------------------------------------
 # Reverse everything the installer below sets up: running processes, the
 # systemd webhook service, MCP + plugin registration, Claude Code hooks and
@@ -67,7 +82,7 @@ if [[ "$REMOVE" == "true" ]]; then
     OLD_PID=$(cat "$SCRIPT_DIR/.webhook-listener.pid" 2>/dev/null || true)
     [[ -n "${OLD_PID:-}" ]] && kill "$OLD_PID" 2>/dev/null || true
   fi
-  command -v fuser &>/dev/null && fuser -k 7777/tcp 2>/dev/null || true
+  kill_port_7777 || true
 
   # 2. Systemd webhook service (needs sudo).
   WEBHOOK_SERVICE="/etc/systemd/system/sidechat-webhook.service"
@@ -571,9 +586,7 @@ if [[ -f "$SCRIPT_DIR/.webhook-listener.pid" ]]; then
   fi
   rm -f "$SCRIPT_DIR/.webhook-listener.pid"
 fi
-if command -v fuser &>/dev/null; then
-  fuser -k 7777/tcp 2>/dev/null && echo "  killed process on port 7777" || true
-fi
+kill_port_7777 && echo "  killed process on port 7777" || true
 
 if command -v systemctl &>/dev/null; then
   SERVICE_CONTENT="[Unit]
