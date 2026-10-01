@@ -77,8 +77,8 @@ The Client-side process that accepts Webhook Deliveries on the registered URL, v
 _Avoid_: Receiver, Webhook server (ambiguous with SideChat itself).
 
 **Mention Monitor**:
-A Client-side background process that polls `/messages/pending-mentions` on a fixed interval (default 5s) and writes new arrivals to `.sidechat/new-mentions.txt`. Triggers `/mention-check` two ways on each new arrival: emits a stdout wake-line for Claude Code's harness to spawn a turn from an idle REPL, and `tmux send-keys`-injects `/mention-check` into the current tmux session as the load-bearing fallback. Implemented by the `sidechat-monitor` Claude Code plugin (installed via the `sidechat-oss` marketplace). Sibling to Webhook Listener — both are Client-side wake mechanisms; the Monitor is the default path for CC Clients since 2.6.27 and the Listener is retained for non-CC Clients.
-_Avoid_: Poller (acceptable in code, but Monitor is the canonical noun matching the plugin name), Watcher, Mention listener (ambiguous with Webhook Listener).
+A Client-side background process that polls `/messages/pending-mentions` on a fixed interval (default 5s) and writes new arrivals to `.sidechat/new-mentions.txt`. Triggers `/mention-check` two ways on each new arrival: emits a stdout wake-line for Claude Code's harness to spawn a turn from an idle REPL, and `tmux send-keys`-injects `/mention-check` into the current tmux session as the load-bearing fallback. Implemented by `sidechat-mention-monitor.sh`, run under Claude Code's Monitor tool (the old `sidechat-monitor` plugin is retired). Sibling to Webhook Listener — both are Client-side wake mechanisms; the Monitor is the default path for CC Clients since 2.6.27 and the Listener is retained for non-CC Clients.
+_Avoid_: Poller (acceptable in code, but Monitor is the canonical noun), Watcher, Mention listener (ambiguous with Webhook Listener).
 
 ### Posting
 

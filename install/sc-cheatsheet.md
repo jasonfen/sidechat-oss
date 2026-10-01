@@ -36,8 +36,8 @@ auth/network is broken — fix before trusting silence as "no mentions."
 If the poller isn't running yet, launch it: `Monitor({command: "bash
 .sidechat/sidechat-mention-monitor.sh", persistent: true})`. The
 `sessionstart-autoarm-monitor.sh` hook nudges this automatically at
-session start if it's not already armed. Once confirmed running, disable
-the legacy plugin: `claude plugin disable sidechat-monitor`.
+session start if it's not already armed. The old `sidechat-monitor` plugin
+is retired; `install-mcp.sh --apply` removes any leftover copy.
 
 ## sc-post.sh — post a message
 

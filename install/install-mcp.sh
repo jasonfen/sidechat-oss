@@ -37,8 +37,8 @@ set -euo pipefail
 # default to $HOME/.sidechat broke bots installed at $PWD/.sidechat (fenbot,
 # 2026-07-25): a scope=mcp token re-mint died with a misleading
 # "config not found. Run install/client.sh first" when the install was fine,
-# just not under $HOME. poll-mentions.sh already resolves this way via
-# resolve-sidechat-dir.sh; install-mcp.sh never got the treatment.
+# just not under $HOME. Other client scripts already resolve it this way;
+# install-mcp.sh never got the treatment.
 if [[ -z "${SIDECHAT_DIR:-}" ]]; then
   _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [[ -f "$_self_dir/config" ]]; then
@@ -313,56 +313,13 @@ if $APPLY; then
   echo ""
   echo "  Done. Verify with: claude mcp list"
 
-  # --- Plugin install (sidechat-monitor) ---
-  # Persistent wake-from-idle. Pre-2.6.11 each bot needed a manual
-  # --plugin-dir flag in its launcher; the marketplace-add + plugin-install
-  # pair makes it user-scope, restart-survivable, and refreshable via
-  # sc-update.sh's `claude plugin update` call.
-  #
-  # Force a full tear-down + re-install on every --apply so marketplace source
-  # schema changes (e.g. 2.6.11→2.6.12 url→git-subdir) actually re-clone the
-  # plugin. Without the tear-down, `marketplace add` and `plugin install` both
-  # silently no-op when the names already exist, pinning bots to whatever
-  # schema they were first installed under.
-  #
-  # 2.6.48: `claude plugin uninstall` + `plugin install` below re-installs the
-  # plugin in its default (enabled) state, which clobbers an operator's own
-  # `claude plugin disable sidechat-monitor` — fenbot hit this running their
-  # own Monitor-based wake-path prototype (mention 3889, 2026-08-11): every
-  # sc-update-triggered --apply silently re-armed the plugin they'd just
-  # turned off. Check `claude plugin list`'s Status line for this plugin
-  # before touching it; skip the reinstall entirely (not even the schema-
-  # migration re-clone) when the operator has explicitly disabled it — an
-  # explicit opt-out should survive an unrelated MCP-drift-triggered refresh.
-  MARKETPLACE_URL="$SERVER_URL/install/marketplace.json"
+  # --- Retire the legacy sidechat-monitor plugin ---
+  # The Monitor-based wake path (sidechat-mention-monitor.sh) replaced the
+  # plugin's tmux send-keys poller, and the plugin and its marketplace are no
+  # longer shipped. Remove any copy an earlier install left behind so it can't
+  # re-arm a second poller at session start. Quiet no-op when it isn't there.
   if command -v claude &>/dev/null; then
-    PLUGIN_STATUS_LINE=$(claude plugin list 2>/dev/null | awk '/sidechat-monitor@sidechat-oss/{f=1} f && /Status:/{print; exit}')
-    if printf '%s' "$PLUGIN_STATUS_LINE" | grep -qi 'disabled'; then
-      echo ""
-      echo "  sidechat-monitor is user-disabled (\`claude plugin disable\`) — leaving"
-      echo "    it alone. Re-enable with \`claude plugin enable sidechat-monitor\` if"
-      echo "    you want it back; install-mcp.sh won't silently re-arm it."
-    else
-      echo ""
-      echo "  Reinstalling sidechat-monitor plugin from marketplace..."
-      claude plugin uninstall sidechat-monitor@sidechat-oss >/dev/null 2>&1 || true
-      claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
-      if ! claude plugin marketplace add "$MARKETPLACE_URL" >/dev/null 2>&1; then
-        echo "  WARN: marketplace add failed; retrying once." >&2
-        claude plugin marketplace add "$MARKETPLACE_URL" >/dev/null 2>&1 || true
-      fi
-      if claude plugin install sidechat-monitor@sidechat-oss 2>&1 | grep -qE "Successfully installed|already installed"; then
-        echo "  OK: sidechat-monitor@sidechat-oss enabled (user scope)."
-        echo ""
-        echo "  ⚠ sidechat-monitor plugin installed. Run /reload-plugins in your"
-        echo "    Claude Code session (or restart) to activate — existing"
-        echo "    sessions keep the old no-wake state until then."
-      else
-        echo "  WARN: plugin install did not report success. Try manually:"
-        echo "    claude plugin install sidechat-monitor@sidechat-oss"
-      fi
-    fi
-  else
-    echo "  Skipping plugin install: \`claude\` not on PATH."
+    claude plugin uninstall sidechat-monitor@sidechat-oss >/dev/null 2>&1 || true
+    claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
   fi
 fi

@@ -250,30 +250,7 @@ if command -v jq &>/dev/null && [[ -f "$HOME/.claude.json" ]] && [[ -x "$SCRIPT_
   fi
 fi
 
-# sidechat-monitor plugin refresh. Asks CC for the latest version from the
-# sidechat-oss marketplace. Quiet no-op when plugin is absent (operator hasn't
-# run install-mcp.sh --apply on 2.6.11+ yet) or already up to date. Running
-# CC session still holds the old plugin state; a full restart activates the
-# update. NB: `/reload-plugins` is deliberately *not* recommended — it spawns a
-# fresh poll-mentions.sh without stopping the old one, and the two monitors
-# race the same new-mention-ids.txt (double /mention-check fires). Until
-# poll-mentions.sh grows a duplicate-instance guard, restart is the safe path.
-if command -v claude &>/dev/null; then
-  if claude plugin list 2>/dev/null | grep -q "sidechat-monitor@sidechat-oss"; then
-    # marketplace update pulls the latest manifest, then plugin update installs
-    # if there's a newer version. Both are cheap when steady-state.
-    claude plugin marketplace update sidechat-oss >/dev/null 2>&1 || true
-    if claude plugin update sidechat-monitor@sidechat-oss 2>&1 | grep -qE "Successfully updated|Updated|already up to date"; then
-      # Only print the reload hint when the update actually changed something.
-      # Otherwise this line would fire on every sc-update run.
-      if claude plugin update sidechat-monitor@sidechat-oss 2>&1 | grep -qvE "already up to date"; then
-        echo "  ⚠ sidechat-monitor plugin updated. Restart your Claude Code session to activate. (Avoid /reload-plugins: it starts a second poller without stopping the old one, and two monitors racing the same new-mention-ids.txt double-fire /mention-check — fenbot, 2026-07-25.)"
-      fi
-    fi
-  fi
-fi
-
-# Monitor wake-path script drift. Same rationale as the two warnings above:
+# Monitor wake-path script drift. Same rationale as the MCP warning above:
 # this loop already rewrote sidechat-mention-monitor.sh on disk, but an
 # already-running Monitor task (if armed this session) keeps executing
 # whatever was loaded into the bash interpreter at launch — file changes on

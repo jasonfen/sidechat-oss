@@ -3,6 +3,7 @@ import { timing } from "hono/timing";
 import { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import type { Context, Next } from "hono";
 import { mkdirSync, unlinkSync, existsSync } from "fs";
 import { extname } from "path";
@@ -3697,23 +3698,6 @@ app.get("/install/hooks/:script", async (c) => {
   });
 });
 
-// Serve the Claude Code plugin marketplace manifest for sidechat-monitor.
-// Consumed by install-mcp.sh via `claude plugin marketplace add <url>` then
-// `claude plugin install sidechat-monitor@sidechat-oss` — persistent plugin
-// install across CC sessions with no per-bot launcher patching. Served at
-// /install/marketplace.json (not /.claude-plugin/marketplace.json) so it's
-// a single clean install URL the operator pastes.
-app.get("/install/marketplace.json", async (c) => {
-  const filepath = `${import.meta.dir}/.claude-plugin/marketplace.json`;
-  const f = Bun.file(filepath);
-  if (!(await f.exists())) {
-    return c.json({ error: "Not found" }, 404);
-  }
-  return new Response(f, {
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
-});
-
 // Serve the canonical SideChat CLAUDE.md block. Single source of truth for
 // the per-bot CLAUDE.md ## SideChat section — consumed by install/client.sh
 // on first install and install/sc-update.sh on subsequent refreshes. Keeps
@@ -3939,8 +3923,6 @@ async function requireObserver(c: Context, next: Next) {
 // ADMIN_SESSION_TTL_HOURS lifetime than /watch/login's 30-day default).
 // Per fenbot's R2: re-query observers.role on every request so a demoted
 // admin loses access immediately, no session invalidation needed.
-// Stale legacy admin_session cookies log admin.session.legacy and redirect
-// (response shape identical to no-session — no fingerprinting).
 async function requireAdmin(c: Context, next: Next) {
   const token = getCookie(c, "observer_session");
   if (token) {
@@ -3957,13 +3939,6 @@ async function requireAdmin(c: Context, next: Next) {
       await next();
       return;
     }
-  }
-  // Legacy admin_session cookie path — log and clear, then fall through to
-  // standard "no session" redirect so response shape is indistinguishable.
-  const legacy = getCookie(c, "admin_session");
-  if (legacy) {
-    logEvent("admin.session.legacy", { ip: getClientIP(c) });
-    deleteCookie(c, "admin_session", { path: "/" });
   }
   return c.redirect("/admin/login");
 }
@@ -4838,8 +4813,6 @@ app.post("/admin/logout", requireAdmin, async (c) => {
   const token = getCookie(c, "observer_session");
   if (token) db.run("DELETE FROM observer_sessions WHERE token = ?", [token]);
   deleteCookie(c, "observer_session", { path: "/" });
-  // Also clear any stale legacy admin_session cookie (defense in depth).
-  deleteCookie(c, "admin_session", { path: "/" });
   logEvent("admin.logout", { ip: getClientIP(c), observer_id: c.get("admin_observer_id"), username: c.get("admin_username") });
   return c.redirect("/admin/login");
 });
@@ -5943,59 +5916,38 @@ app.get("/events", requireSessionOrObserver, (c) => {
   sseConnectionsPerSender.set(username, openCount + 1);
   if (LOG_VERBOSE) logEvent("sse.connected", { username, connection_count: openCount + 1 });
 
-  let cleanup: () => void;
-  const stream = new ReadableStream({
-    type: "direct",
-    async pull(controller) {
-      const messageCount = (db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
-      controller.write(`event: connected\ndata: ${JSON.stringify({ messageCount, username, canPost: userCanPost })}\n\n`);
-      controller.flush();
+  const res = streamSSE(c, async (stream) => {
+    const messageCount = (db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
+    await stream.writeSSE({ event: "connected", data: JSON.stringify({ messageCount, username, canPost: userCanPost }) });
 
-      const send = (event: string, data: any) => {
-        try {
-          controller.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-          controller.flush();
-        } catch {}
-      };
+    const send = (event: string, data: any) => {
+      stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
+    };
+    sseClients.add(send);
 
-      sseClients.add(send);
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      clearInterval(heartbeat);
+      sseClients.delete(send);
+      const n = (sseConnectionsPerSender.get(username) ?? 1) - 1;
+      if (n <= 0) sseConnectionsPerSender.delete(username);
+      else sseConnectionsPerSender.set(username, n);
+    };
+    const heartbeat = setInterval(() => {
+      if (stream.aborted || stream.closed) return cleanup();
+      stream.writeSSE({ event: "ping", data: "keepalive" }).catch(cleanup);
+    }, 15000);
 
-      const heartbeat = setInterval(() => {
-        try {
-          controller.write(`event: ping\ndata: keepalive\n\n`);
-          controller.flush();
-        } catch {
-          clearInterval(heartbeat);
-          sseClients.delete(send);
-        }
-      }, 15000);
-
-      cleanup = () => {
-        clearInterval(heartbeat);
-        sseClients.delete(send);
-        const n = (sseConnectionsPerSender.get(username) ?? 1) - 1;
-        if (n <= 0) sseConnectionsPerSender.delete(username);
-        else sseConnectionsPerSender.set(username, n);
-      };
-
-      // Keep the stream open until the client disconnects
-      await new Promise<void>((resolve) => {
-        c.req.raw.signal.addEventListener("abort", () => {
-          cleanup();
-          resolve();
-        });
-      });
-    },
+    // Keep the stream open until the client disconnects
+    await new Promise<void>((resolve) => stream.onAbort(resolve));
+    cleanup();
   });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+  // streamSSE sets its own Cache-Control; keep no-transform so proxies don't compress/buffer the stream.
+  res.headers.set("Cache-Control", "no-cache, no-transform");
+  res.headers.set("X-Accel-Buffering", "no");
+  return res;
 });
 
 // --- Start ---

@@ -9,3 +9,4 @@ bun.lockb
 *.crt
 *.key
 CLAUDE.md
+.claude/commands/

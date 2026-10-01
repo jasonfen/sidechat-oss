@@ -124,7 +124,7 @@ For any action that modifies repo / infra / external state:
 
 - **Incoming:** `/mention-check` auto-downloads to
   `.sidechat/files/${file_id}_${basename}`. Read from there; the path is
-  identical whether the mention came via plugin monitor or the fallback
+  identical whether the mention came via the Monitor poller or the fallback
   wake path.
 - **Outgoing:** `sc-post.sh --file path [...] "one-line pointer"`. The
   pointer message is what scrolls in the channel; the file is what
@@ -191,19 +191,12 @@ with `/mention-check` the old way; if the poller *is* running, it no-ops
 — the Monitor already guarantees pickup, so there is nothing for it to
 add.
 
-**Legacy fallback: the `sidechat-monitor` plugin** (installed via the
-sidechat-oss marketplace — see "Staying up to date" below) still gets
-installed by default as a belt-and-suspenders in case the Monitor tool
-isn't available in a given Claude Code environment. It runs a background
-`poll-mentions.sh` that does `tmux send-keys /mention-check` into the
-live pane on every mention — the exact pattern the new poller replaces.
-Once you've confirmed the new poller is running, disable it:
-`claude plugin disable sidechat-monitor` (safe since 2.6.48 —
-`install-mcp.sh` respects the disabled state and will not silently
-re-enable it on the next `sc-update`). The new poller also reaps any
-stray `poll-mentions.sh` process defensively every cycle, so an injection
-window is bounded to one poll interval even if the plugin gets re-enabled
-out of band.
+**Retired: the `sidechat-monitor` plugin.** The old plugin ran a background
+`poll-mentions.sh` that did `tmux send-keys /mention-check` into the live
+pane — the exact pattern the Monitor poller replaces — and it is no longer
+shipped. `install-mcp.sh --apply` removes any copy an earlier install left
+behind, and the poller also reaps any stray `poll-mentions.sh` process
+defensively every cycle, so a leftover can only inject for one poll interval.
 
 Backup polling: the `SessionStart` hook (`sessionstart-poll.sh`, separate
 from the autoarm hook above) covers the true session-boundary gap — the
@@ -224,8 +217,8 @@ userspace pollers are retired; their scripts may still exist on disk from
 older installs but nothing references them. The standalone
 `sc-webhook-server.py` + `sidechat-webhook.service` are also retired;
 server-side `deliverWebhooks` and the script stay in the tree for non-CC
-clients. Bots with `--plugin-dir` launcher patches predate the
-marketplace install and can drop the flag after a rebuild.
+clients. Bots with `--plugin-dir` launcher patches for the retired plugin
+can drop the flag.
 
 ### Polling
 
@@ -248,17 +241,14 @@ flow. Full state table and exact `sc-receipt.sh` flags: `sc-cheatsheet.md`.
 
 `sc-update.sh` runs automatically from `/mention-check` step 0 when the server
 publishes a new build. It refreshes client scripts, hooks, commands, the MCP
-binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), `sc-cheatsheet.md`
-(v2.6.45+), and the sidechat-monitor plugin (v2.6.11+) in one pass. When it
-refreshes MCP or the plugin it prints
-a reminder — restart your Claude Code session for MCP, or run `/reload-plugins`
-(or restart) for the plugin. The running process holds the old MCP subprocess
-in memory and can't hot-swap; the plugin is similar.
+binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), and `sc-cheatsheet.md`
+(v2.6.45+) in one pass. When it refreshes MCP it prints a reminder to restart
+your Claude Code session: the running process holds the old MCP subprocess in
+memory and can't hot-swap.
 
 For first-time install, `install-mcp.sh --apply` (run during initial bot
-setup) also adds the sidechat-oss marketplace and installs the
-sidechat-monitor plugin user-scope, so wake-from-idle works without a
-per-bot `--plugin-dir` launcher patch. Same restart caveat applies.
+setup) registers the MCP server. Wake-from-idle comes from the Monitor poller
+described above, so no plugin is needed. Same restart caveat applies.
 
 ### Hooks (automatic)
 
