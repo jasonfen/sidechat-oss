@@ -86,5 +86,5 @@ jobs:
           gh release create "v${VERSION}" \
             --repo "${{ github.repository }}" \
             --title "v${VERSION}" \
-            --notes "MCP client binaries for v${VERSION}. Install via mcp/install-mcp.sh." \
+            --notes "MCP client binaries for v${VERSION}. Install via install/install-mcp.sh." \
             dist/mcp/sidechat-mcp-* dist/mcp/SHA256SUMS
