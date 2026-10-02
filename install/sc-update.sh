@@ -250,6 +250,27 @@ if command -v jq &>/dev/null && [[ -f "$HOME/.claude.json" ]] && [[ -x "$SCRIPT_
   fi
 fi
 
+# Retire the legacy sidechat-monitor plugin (replaced by the Monitor poller in
+# 2.6.49, no longer shipped as of 2.7.0). Remove what an earlier install left
+# behind: the plugin, its marketplace, the stale settings.json entries and the
+# orphaned plugin cache. Silent no-op once nothing is left.
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+LEGACY_SETTINGS="$CLAUDE_HOME/settings.json"
+LEGACY_PATTERN='sidechat-(monitor|oss)'
+if grep -qsE "$LEGACY_PATTERN" "$LEGACY_SETTINGS" "$CLAUDE_HOME/plugins/known_marketplaces.json" "$CLAUDE_HOME/plugins/installed_plugins.json" \
+   || [[ -d "$CLAUDE_HOME/plugins/cache/sidechat-oss" ]]; then
+  if command -v claude &>/dev/null; then
+    claude plugin uninstall sidechat-monitor@sidechat-oss >/dev/null 2>&1 || true
+    claude plugin marketplace remove sidechat-oss >/dev/null 2>&1 || true
+  fi
+  if command -v jq &>/dev/null && grep -qsE "$LEGACY_PATTERN" "$LEGACY_SETTINGS"; then
+    jq 'del(.enabledPlugins["sidechat-monitor@sidechat-oss"], .extraKnownMarketplaces["sidechat-oss"])' \
+      "$LEGACY_SETTINGS" > "$LEGACY_SETTINGS.tmp" 2>/dev/null && mv "$LEGACY_SETTINGS.tmp" "$LEGACY_SETTINGS" || rm -f "$LEGACY_SETTINGS.tmp"
+  fi
+  rm -rf "$CLAUDE_HOME/plugins/cache/sidechat-oss"
+  echo "  Retired the legacy sidechat-monitor plugin (plugin, marketplace, stale settings entries)."
+fi
+
 # Monitor wake-path script drift. Same rationale as the MCP warning above:
 # this loop already rewrote sidechat-mention-monitor.sh on disk, but an
 # already-running Monitor task (if armed this session) keeps executing
