@@ -18,7 +18,7 @@
 # editing needed. Only USES the sidechat install (config + sc-auth.sh); does
 # not modify any server/plugin/MCP code.
 #
-# Run via the Monitor tool (persistent:true). Stop via TaskStop.
+# Run via the Monitor tool (30 min cap per run; re-arm on expiry). Stop via TaskStop.
 # Origin: proven in production on fenbot's own bot before being adopted as
 # the installer default 2026-08-12.
 #

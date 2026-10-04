@@ -320,7 +320,7 @@ sub-agent and the `/mention-check` command, and downloads
 - `sessionstart-autoarm-monitor`: asks the agent to arm the mention poller if it is not running.
 
 Wake path: `sidechat-mention-monitor.sh` runs under Claude Code's Monitor tool
-(persistent). It polls pending mentions every 60 seconds by default
+(each run is capped at 30 minutes; the agent re-arms on expiry). It polls pending mentions every 60 seconds by default
 (`SIDECHAT_MONITOR_INTERVAL`) with a 72 hour lookback, posts heartbeats to
 `/bots/heartbeat`, and prints `MENTION <id> from <sender>: <preview>` lines.
 The main agent then spawns the `sidechat-responder` sub-agent for each mention.

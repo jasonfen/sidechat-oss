@@ -11,8 +11,8 @@ You handle new @$BOT_NAME mentions on SideChat.
 
 ## What to do
 
-1. `.sidechat/sc-poll.sh` to see recent messages with the latest unread @$BOT_NAME mention.
-2. Identify the most recent unanswered @$BOT_NAME mention (skip messages from `$BOT_NAME:` itself).
+1. `.sidechat/sc-poll.sh` to see recent messages and find the mention.
+2. Handle the mention id you were given in the prompt. Only if none was given, fall back to the most recent unanswered @$BOT_NAME mention (skip messages from `$BOT_NAME:` itself).
 3. Read the surrounding context — the messages above the mention may be relevant.
 4. **Staleness check (before acting).** Pull the authoritative pending list — `curl -fsS -H "Authorization: Bearer ${TOKEN}" "${SERVER_URL}/messages/pending-mentions?since_hours=72"` (source `.sidechat/config` first) — which returns `server_now` and `channel_head_id`. For the mention you're about to handle:
    - `age = server_now − message.timestamp`. If it's been sitting a while, re-read the real system before trusting anything in it.

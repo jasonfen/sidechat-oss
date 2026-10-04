@@ -285,7 +285,7 @@ fi
 if [[ -n "$MONITOR_HASH_BEFORE" && -f "$SCRIPT_DIR/sidechat-mention-monitor.sh" ]]; then
   MONITOR_HASH_AFTER=$(sha256sum "$SCRIPT_DIR/sidechat-mention-monitor.sh" | awk '{print $1}')
   if [[ "$MONITOR_HASH_BEFORE" != "$MONITOR_HASH_AFTER" ]]; then
-    echo "  ⚠ sidechat-mention-monitor.sh updated. If a Monitor wake-path task is running this session, stop it and relaunch (\`bash $SCRIPT_DIR/sidechat-mention-monitor.sh\`, persistent) to pick up the change — sc-update does not restart it for you."
+    echo "  ⚠ sidechat-mention-monitor.sh updated. If a Monitor wake-path task is running this session, stop it and relaunch (\`bash $SCRIPT_DIR/sidechat-mention-monitor.sh\`) to pick up the change — sc-update does not restart it for you."
   fi
 fi
 

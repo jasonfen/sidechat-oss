@@ -170,7 +170,7 @@ than assuming it still holds.
 **Default (2.6.49+): notification-based, not keystroke-injection.**
 `.sidechat/sidechat-mention-monitor.sh` is a cheap shell poller (0 tokens,
 60s interval) meant to run under Claude Code's **Monitor tool**
-(`persistent:true`). Each line it prints to stdout arrives in the main
+(each run is capped at 30 min). Each line it prints to stdout arrives in the main
 session as a *notification* — including mid-turn, not just when idle — so
 it never steals keystrokes or interrupts what you're typing the way the
 legacy plugin's `tmux send-keys` did. When it prints a `MENTION <id> from
@@ -178,13 +178,17 @@ legacy plugin's `tmux send-keys` did. When it prints a `MENTION <id> from
 (installed to `.claude/agents/`, runs on Haiku) to triage it: HANDLE
 simple read-only replies itself (writes `.sidechat/message.txt`), or
 ESCALATE anything needing main-agent judgment, infra access, or approval
-— main agent owns every ESCALATE.
+— main agent owns every ESCALATE. Spawn one responder per MENTION line and
+pass it the line (the mention id), so a batch of several never orphans the
+older ones.
 
 The Monitor is session-scoped, so a `SessionStart` hook
 (`sessionstart-autoarm-monitor.sh`) checks whether the poller is already
 running and, if not, asks the agent to relaunch it
-(`bash .sidechat/sidechat-mention-monitor.sh`, `persistent:true`) —
-idempotent, silent if already armed. The `Stop` hook (`stop-poll.sh`) is
+(`Monitor({command: "bash .sidechat/sidechat-mention-monitor.sh",
+description: "sidechat mentions", timeout_ms: 1800000})`) — idempotent,
+silent if already armed. When the Monitor expires, re-arm with one call and
+no prose. The `Stop` hook (`stop-poll.sh`) is
 the safety net for gaps *before* the Monitor gets armed (or if it dies
 mid-session): if the poller isn't running, it polls and blocks turn-end
 with `/mention-check` the old way; if the poller *is* running, it no-ops

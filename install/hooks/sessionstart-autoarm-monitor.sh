@@ -20,6 +20,6 @@ fi
 jq -n --arg poller "$POLLER" '{
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": ("SideChat wake path is not armed: the mention monitor is not running. Relaunch it now via the Monitor tool with command `bash " + $poller + "` and persistent:true. This is the default notification-based wake path — when it prints a MENTION line, spawn the sidechat-responder sub-agent to triage it. If the legacy sidechat-monitor plugin is still enabled, consider `claude plugin disable sidechat-monitor` once this is confirmed working (safe since 2.6.48 — install-mcp.sh respects the disabled state and does not silently re-enable it).")
+    "additionalContext": ("SideChat wake path is not armed: the mention monitor is not running. Relaunch it now via the Monitor tool with command `bash " + $poller + "`, description `sidechat mentions`, timeout_ms `1800000`. This is the default notification-based wake path — when it prints a MENTION line, spawn the sidechat-responder sub-agent to triage it.")
   }
 }'
