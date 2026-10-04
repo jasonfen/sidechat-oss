@@ -59,6 +59,24 @@ if ! flock -n 9; then
   exit 0
 fi
 
+# The process that owns this poller's lifetime: the claude session that armed
+# it. Under both the Monitor tool and Bash run_in_background the poller sits
+# under a `bash -c` wrapper, and a background shell task survives a session end
+# when the user picks "Move to background and exit", leaving that wrapper alive
+# under init. So $PPID is not enough: walk up to the `claude` process and watch
+# that. Falls back to $PPID when there is no claude ancestor (manual run).
+# SIDECHAT_OWNER_COMM names the process to look for (tests use it).
+find_owner() {
+  local p=$$ comm
+  while [[ -n "$p" && "$p" -gt 1 ]]; do
+    comm=$(cat "/proc/$p/comm" 2>/dev/null) || break
+    [[ "$comm" == "${SIDECHAT_OWNER_COMM:-claude}" ]] && { echo "$p"; return; }
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
+  echo "$PPID"
+}
+OWNER_PID=$(find_owner)
+
 # Belt-and-suspenders: reap any tmux-inject plugin poller that respawns
 # (e.g. `claude plugin enable` run out of band, or a fresh session before
 # this monitor gets armed). Since 2.6.48, install-mcp.sh respects a
@@ -154,10 +172,9 @@ fail_streak=0
 declare -A nagged
 
 while true; do
-  # Orphan guard: $PPID is fixed at startup, so once the session that armed us
-  # is gone this fails and we exit instead of polling forever. Assumes the
-  # Monitor tool runs us directly (no wrapper shell) — true as of 2026-10-04.
-  kill -0 "$PPID" 2>/dev/null || exit 0
+  # Orphan guard: once the claude session that armed us is gone, exit instead of
+  # polling forever (see find_owner above).
+  kill -0 "$OWNER_PID" 2>/dev/null || exit 0
   if [[ "$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)" != "$SELF_HASH" ]]; then
     echo "MONITOR-RELOADED — sidechat-mention-monitor.sh changed on disk; reloading."
     exec bash "${BASH_SOURCE[0]}"
@@ -183,6 +200,7 @@ while true; do
   send_heartbeat "$(printf '%s' "$json" | jq -r '.count // 0' 2>/dev/null || echo 0)"
 
   # Emit one line per NEW pending mention, then record it seen.
+  announced=""
   while IFS=$'\t' read -r id sender age content files; do
     [[ -n "$id" ]] || continue
     preview=$(printf '%s' "$content" | tr '\n' ' ' | cut -c1-140)
@@ -202,13 +220,18 @@ while true; do
     fi
     echo "MENTION ${id} from ${sender}${attach}: ${preview}"
     echo "$id" >> "$SEEN_FILE"
-    # Spike hook (#2): one-shot arm that ends after the first announcement.
-    [[ -z "${SIDECHAT_MONITOR_EXIT_ON_MENTION:-}" ]] || exit 0
+    announced=1
   done < <(printf '%s' "$json" | jq -r '
     def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     (if .server_now then (.server_now | ts) else now end) as $now
     | (.messages // [])[]
     | [.id, (.sender // "?"), (($now - (.timestamp | ts)) | floor), (.content // ""), ((.files // []) | @json)] | @tsv' 2>/dev/null)
+
+  # WAKE_PATH=background: run under Bash run_in_background, so exiting is the
+  # notification. Exit only after the whole batch is announced (one arm, one
+  # turn); a STILL-PENDING line alone does not end the run, or a mention the
+  # agent is holding would make every re-arm exit at once.
+  [[ -z "${SIDECHAT_MONITOR_EXIT_ON_MENTION:-}" || -z "$announced" ]] || exit 0
 
   sleep "$POLL_INTERVAL" 9>&-
 done

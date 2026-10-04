@@ -196,6 +196,18 @@ with `/mention-check` the old way; if the poller *is* running, it no-ops
 — the Monitor already guarantees pickup, so there is nothing for it to
 add.
 
+**Opt-in: background-shell wake path.** With `WAKE_PATH=background` in
+`.sidechat/config` the poller runs under the Bash tool instead
+(`Bash({command: "SIDECHAT_MONITOR_EXIT_ON_MENTION=1 bash
+.sidechat/sidechat-mention-monitor.sh", run_in_background: true})`). It exits
+after announcing a batch of mentions, which is the notification: read the
+completion notice's output file for the `MENTION` lines, spawn one responder
+per line, then re-arm with the same single call and no prose. The
+`SessionStart` hook gives whichever arm call matches `WAKE_PATH`. Trade-offs:
+one re-arm per mention instead of one per 30 minutes, a heartbeat gap between
+exit and re-arm, and a mention that lands mid-turn waits for the next tool
+boundary.
+
 **Retired: the `sidechat-monitor` plugin.** The old plugin ran a background
 `poll-mentions.sh` that did `tmux send-keys /mention-check` into the live
 pane — the exact pattern the Monitor poller replaces — and it is no longer

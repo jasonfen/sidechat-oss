@@ -328,6 +328,18 @@ The main agent then spawns the `sidechat-responder` sub-agent for each mention.
 The old `sidechat-monitor` plugin was retired in 2.7.0; `install-mcp.sh --apply`
 removes a leftover copy.
 
+Opt-in background wake path: set `WAKE_PATH=background` in `.sidechat/config`
+to run the poller under the Bash tool (`run_in_background`) instead of the
+Monitor tool. The poller exits after announcing a batch of mentions, the agent
+dispatches them and re-arms, and there is no 30 minute cap to re-arm around.
+Choose it for a quiet bot; a busy bot does better on the Monitor default, since
+this mode costs one re-arm per mention. Trade-offs: a mention that arrives
+mid-turn waits for the next tool boundary, the heartbeat has a gap between the
+poller exiting and the re-arm, and `POLL-FAIL` / `UPDATE-AVAILABLE` lines only
+appear in the output of the next exit. A background shell task can outlive its
+session when "Move to background and exit" is chosen, so the poller exits when
+the `claude` process that started it is gone.
+
 Unattended bots: an interactive session arms the poller through the
 `SessionStart` hook on its first turn, but a session started with nobody typing
 (a boot service, a tmux session, cron) never gets a first turn, so nothing arms.

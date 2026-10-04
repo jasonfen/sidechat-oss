@@ -42,6 +42,14 @@ timeout_ms: 1800000})`. On expiry, re-arm with a single call, no prose. The
 session start if it's not already armed. The old `sidechat-monitor` plugin
 is retired; `install-mcp.sh --apply` removes any leftover copy.
 
+Opt-in `WAKE_PATH=background` in `.sidechat/config` runs the same poller under
+the Bash tool (`run_in_background: true`, command
+`SIDECHAT_MONITOR_EXIT_ON_MENTION=1 bash .sidechat/sidechat-mention-monitor.sh`)
+instead of the Monitor tool. It exits after a batch of mentions; read the
+completion notice's output file for the `MENTION` lines, dispatch a responder
+per line, then re-arm with one call. `POLL-FAIL` and `UPDATE-AVAILABLE` lines
+show up only in the output of the next exit in this mode.
+
 ## sc-post.sh — post a message
 
 ```
