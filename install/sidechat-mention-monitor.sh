@@ -34,6 +34,10 @@ SEEN_FILE="$SIDECHAT_DIR/.mention-monitor-seen"
 POLL_INTERVAL="${SIDECHAT_MONITOR_INTERVAL:-60}"
 LOOKBACK_HOURS="${SIDECHAT_MONITOR_HOURS:-72}"
 LOCK_FILE="$SIDECHAT_DIR/.mention-monitor.lock"
+NAG_AFTER="${SIDECHAT_MONITOR_NAG_AFTER:-900}"
+# Reload ourselves when sc-update.sh rewrites this file, so a running Monitor
+# never keeps stale code. exec keeps the PID, so the Monitor task is unaffected.
+SELF_HASH=$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)
 
 # Singleton guard — only one poller at a time no matter how many times armed
 # (SessionStart auto-arm must never stack a second instance onto a manual
@@ -51,7 +55,7 @@ LOCK_FILE="$SIDECHAT_DIR/.mention-monitor.lock"
 # unaffected) specifically to prevent this -- do not drop it.
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-  echo "sidechat-mention-monitor: another instance already holds $LOCK_FILE — exiting" >&2
+  echo "ALREADY-RUNNING — another sidechat-mention-monitor holds $LOCK_FILE; this arm exits."
   exit 0
 fi
 
@@ -146,8 +150,18 @@ download_attachments() {
 }
 
 fail_streak=0
+# Mentions already re-announced as STILL-PENDING by this arm (once each).
+declare -A nagged
 
 while true; do
+  # Orphan guard: $PPID is fixed at startup, so once the session that armed us
+  # is gone this fails and we exit instead of polling forever. Assumes the
+  # Monitor tool runs us directly (no wrapper shell) — true as of 2026-10-04.
+  kill -0 "$PPID" 2>/dev/null || exit 0
+  if [[ "$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)" != "$SELF_HASH" ]]; then
+    echo "MONITOR-RELOADED — sidechat-mention-monitor.sh changed on disk; reloading."
+    exec bash "${BASH_SOURCE[0]}"
+  fi
   reap_plugin_poller
   check_version
   json=$(fetch_pending)
@@ -169,12 +183,18 @@ while true; do
   send_heartbeat "$(printf '%s' "$json" | jq -r '.count // 0' 2>/dev/null || echo 0)"
 
   # Emit one line per NEW pending mention, then record it seen.
-  while IFS=$'\t' read -r id sender content files; do
+  while IFS=$'\t' read -r id sender age content files; do
     [[ -n "$id" ]] || continue
+    preview=$(printf '%s' "$content" | tr '\n' ' ' | cut -c1-140)
     if grep -qxF "$id" "$SEEN_FILE" 2>/dev/null; then
+      # Announced earlier but still unread: the handler may have been lost
+      # (two MENTION lines in one batch, dead sub-agent). Say so once per arm.
+      if [[ "$age" -gt "$NAG_AFTER" && -z "${nagged[$id]:-}" ]]; then
+        nagged[$id]=1
+        echo "STILL-PENDING ${id} from ${sender} (unread ${age}s): ${preview}"
+      fi
       continue
     fi
-    preview=$(printf '%s' "$content" | tr '\n' ' ' | cut -c1-140)
     attach=""
     if [[ "$files" != "[]" && -n "$files" ]]; then
       attach=" [has attachment]"
@@ -182,7 +202,13 @@ while true; do
     fi
     echo "MENTION ${id} from ${sender}${attach}: ${preview}"
     echo "$id" >> "$SEEN_FILE"
-  done < <(printf '%s' "$json" | jq -r '(.messages // [])[] | [.id, (.sender // "?"), (.content // ""), ((.files // []) | @json)] | @tsv' 2>/dev/null)
+    # Spike hook (#2): one-shot arm that ends after the first announcement.
+    [[ -z "${SIDECHAT_MONITOR_EXIT_ON_MENTION:-}" ]] || exit 0
+  done < <(printf '%s' "$json" | jq -r '
+    def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+    (if .server_now then (.server_now | ts) else now end) as $now
+    | (.messages // [])[]
+    | [.id, (.sender // "?"), (($now - (.timestamp | ts)) | floor), (.content // ""), ((.files // []) | @json)] | @tsv' 2>/dev/null)
 
   sleep "$POLL_INTERVAL" 9>&-
 done

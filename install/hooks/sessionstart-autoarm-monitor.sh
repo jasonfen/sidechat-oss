@@ -13,9 +13,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 POLLER="$SCRIPT_DIR/sidechat-mention-monitor.sh"
 
-if pgrep -f 'sidechat-mention-monitor\.sh' >/dev/null 2>&1; then
-  exit 0
-fi
+# The poller holds an flock on its lock file for life; probing it is per-install.
+flock -n "$SCRIPT_DIR/.mention-monitor.lock" true || exit 0
 
 jq -n --arg poller "$POLLER" '{
   "hookSpecificOutput": {

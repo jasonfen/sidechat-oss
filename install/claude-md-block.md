@@ -180,7 +180,8 @@ simple read-only replies itself (writes `.sidechat/message.txt`), or
 ESCALATE anything needing main-agent judgment, infra access, or approval
 — main agent owns every ESCALATE. Spawn one responder per MENTION line and
 pass it the line (the mention id), so a batch of several never orphans the
-older ones.
+older ones. A `STILL-PENDING <id> ...` line means that mention was announced
+earlier and is still unread: re-dispatch it or reply yourself.
 
 The Monitor is session-scoped, so a `SessionStart` hook
 (`sessionstart-autoarm-monitor.sh`) checks whether the poller is already

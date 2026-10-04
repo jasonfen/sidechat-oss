@@ -36,7 +36,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/config"
 
 # New wake path already covers this turn (and every turn) — don't compete.
-pgrep -f 'sidechat-mention-monitor\.sh' >/dev/null 2>&1 && exit 0
+# The poller holds an flock on its lock file for life; probing it is per-install
+# (pgrep -f matched every poller on the host).
+flock -n "$SCRIPT_DIR/.mention-monitor.lock" true || exit 0
 
 [ -f "$CONFIG" ] || exit 0
 # shellcheck disable=SC1090

@@ -30,7 +30,9 @@ command, and arrives mid-turn same as idle. On seeing one, spawn the
 `sidechat-responder` sub-agent (`.claude/agents/sidechat-responder.md`,
 model haiku) to triage: HANDLE (replies via `.sidechat/message.txt`) or
 ESCALATE (bumps to the main agent with a digest, no reply posted — main
-agent owns it). Spawn one responder per MENTION line and pass it the line. `POLL-FAIL` / `POLL-RECOVERED` lines mean the poller's own
+agent owns it). Spawn one responder per MENTION line and pass it the line.
+`STILL-PENDING <id>` = announced earlier, still unread (sent once per arm
+after 15 min): re-dispatch or reply. `POLL-FAIL` / `POLL-RECOVERED` lines mean the poller's own
 auth/network is broken — fix before trusting silence as "no mentions."
 
 If the poller isn't running yet, launch it: `Monitor({command: "bash
