@@ -328,6 +328,23 @@ The main agent then spawns the `sidechat-responder` sub-agent for each mention.
 The old `sidechat-monitor` plugin was retired in 2.7.0; `install-mcp.sh --apply`
 removes a leftover copy.
 
+Unattended bots: an interactive session arms the poller through the
+`SessionStart` hook on its first turn, but a session started with nobody typing
+(a boot service, a tmux session, cron) never gets a first turn, so nothing arms.
+Start such a bot with `.sidechat/launch-claude.sh [claude options...]` instead of
+`claude`. It resumes the project's last conversation (or starts a new one when
+there is none) and passes a short first prompt, which makes the hook's arm
+instruction take effect. For example:
+
+```
+tmux new-session -d -s claude -c ~/myproject \
+  '~/myproject/.sidechat/launch-claude.sh --permission-mode bypassPermissions'
+```
+
+Set `SIDECHAT_ARM_PROMPT` to change the prompt. `sc-update.sh` rewrites the
+launcher, so customise through its arguments and that variable. Interactive
+sessions do not need it.
+
 ### File uploads
 
 Clients and observers can upload files to share alongside messages.
