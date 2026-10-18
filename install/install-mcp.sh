@@ -148,7 +148,7 @@ if $USE_BINARY; then
         fi
       fi
       if [[ -n "$_bin_url" && "$_bin_url" != "null" ]]; then
-        if curl -fsSL --max-time 60 "$_bin_url" -o "$CACHED_BIN.partial" 2>/dev/null; then
+        if curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 60 "$_bin_url" -o "$CACHED_BIN.partial" 2>/dev/null; then
           if [[ -n "$_sums_url" && "$_sums_url" != "null" ]] \
              && curl -fsSL --max-time 10 "$_sums_url" -o "$CACHED_SUMS" 2>/dev/null; then
             _want=$(awk -v n="sidechat-mcp-${PLATFORM}" '$2==n{print $1}' "$CACHED_SUMS")
