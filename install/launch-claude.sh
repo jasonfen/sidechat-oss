@@ -45,13 +45,13 @@ accept_channel_warning() {
 # prompt positional even after a variadic option such as --allowedTools.
 t0=$(date +%s)
 accept_channel_warning
-"$CLAUDE" --continue "$@" "${TAIL[@]}"; rc=$?
+"$CLAUDE" --continue "$@" ${TAIL[@]+"${TAIL[@]}"}; rc=$?
 
 # With no conversation yet, --continue exits 1 at once ("No conversation found
 # to continue"); start a fresh one.
 # ponytail: any exit 1 within 10 s retries fresh, so a startup crash does too; add a message check if that bites.
 if [[ $rc -eq 1 && $(( $(date +%s) - t0 )) -lt 10 ]]; then
   accept_channel_warning
-  exec "$CLAUDE" "$@" "${TAIL[@]}"
+  exec "$CLAUDE" "$@" ${TAIL[@]+"${TAIL[@]}"}
 fi
 exit $rc

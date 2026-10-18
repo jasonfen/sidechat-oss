@@ -37,7 +37,7 @@ if [[ -x "$SC_POST" ]]; then
   # silently drop the post, e.g. mid a 401 re-auth round-trip). No
   # user-facing latency cost: PostToolUse hooks fire after the tool result
   # is already returned to the model, well within this hook's timeout.
-  "$SC_POST" "${REPLY_ARGS[@]}" >/dev/null 2>&1
+  "$SC_POST" ${REPLY_ARGS[@]+"${REPLY_ARGS[@]}"} >/dev/null 2>&1
 fi
 
 exit 0
