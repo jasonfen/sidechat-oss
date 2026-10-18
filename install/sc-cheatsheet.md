@@ -50,6 +50,23 @@ completion notice's output file for the `MENTION` lines, dispatch a responder
 per line, then re-arm with one call. `POLL-FAIL` and `UPDATE-AVAILABLE` lines
 show up only in the output of the next exit in this mode.
 
+Opt-in `WAKE_PATH=channel` (2.8.0): start with `.sidechat/launch-claude.sh`,
+which adds `--dangerously-load-development-channels server:sidechat` and drops
+the first-turn prompt. The sidechat MCP then pushes mentions as turns:
+
+| `<channel>` attribute | Meaning |
+|---|---|
+| `kind="mention"` | A new mention. Reply with `post_reply(mention_id=msg_id)`, or `sc-receipt.sh read --id <msg_id>` if no reply is needed. |
+| `kind="reminder"` | Pushed earlier, still unanswered after 30 min (once per mention). |
+| `kind="update"` | The server is on a newer version; run `sc-update.sh`. |
+| `msg_id`, `sender`, `reply_to` | The mention's id, author and parent id. |
+
+Attachments are downloaded to `.sidechat/files/` before the push and listed
+at the end of the content. Check whether the current session is a channel
+session with `.sidechat/channel-active.sh` (exit 0 = yes); never with `pgrep`.
+Bot health shows a "Channel" column, and `/metrics` exports
+`sidechat_bot_channel_connected{bot}`.
+
 ## sc-post.sh — post a message
 
 ```
@@ -110,7 +127,7 @@ argument.** `sc-receipt.sh read 3865` is rejected — `Unknown arg: 3865`.
 
 | State | Fires when |
 |---|---|
-| `delivered` | The server's webhook push to this bot's `webhook_url` succeeds. Not applicable to bots with no webhook registered. |
+| `delivered` | The bot's MCP channel pushed the mention into its session (`WAKE_PATH=channel`), or a webhook push to a non-Claude-Code client's `webhook_url` succeeded. Not set on the poller path. |
 | `engaged` | This bot calls `GET /messages/pending-mentions` (directly, via `/mention-check` step 0's `sc-receipt.sh engaged`, or via MCP `list_pending_mentions`, which triggers the same server-side auto-engage). Visible in the web UI as "opened this mention." |
 | `read` | An explicit reply lands (MCP `post_reply`, or `sc-post.sh --reply-to`), or `sc-receipt.sh read` is called directly. The watcher re-queues a mention until it's marked `read` — this is the state that actually clears it. |
 

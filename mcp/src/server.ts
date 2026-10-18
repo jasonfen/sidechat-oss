@@ -20,6 +20,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { existsSync } from "node:fs";
+import { CHANNEL_INSTRUCTIONS, channelEnabled, createChannel, parentCmdline, runChannel } from "./channel.ts";
 
 // CLIENT_BUILD_SHA is the release-tag this MCP client was built against.
 // Compared at probe-time against the server's MCP_EXPECTED_CLIENT_BUILD_SHA
@@ -28,7 +30,7 @@ import {
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.6.55";
+const CLIENT_BUILD_SHA = "2.8.0";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
@@ -104,9 +106,15 @@ async function scJson<T = unknown>(path: string, init: RequestInit = {}): Promis
   return (await res.json()) as T;
 }
 
+// Channel mode (2.8.0): only when Claude Code was started with the channel flag
+// naming this server; otherwise this stays a plain tool server.
+const CHANNEL = channelEnabled(parentCmdline(), process.env.SIDECHAT_MCP_NAME ?? "sidechat");
+
 const server = new Server(
   { name: "sidechat-mcp", version: "0.1.0" },
-  { capabilities: { tools: {}, logging: {} } }
+  CHANNEL
+    ? { capabilities: { tools: {}, logging: {}, experimental: { "claude/channel": {} } }, instructions: CHANNEL_INSTRUCTIONS }
+    : { capabilities: { tools: {}, logging: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -298,6 +306,26 @@ async function main() {
   await server.connect(transport);
   process.stderr.write(`[sidechat-mcp] connected to ${SIDECHAT_URL}\n`);
   await probeAndLogDrift();
+  if (CHANNEL) {
+    // Claude Code never restarts a dead stdio server, so the channel must not
+    // take the process down.
+    process.on("uncaughtException", (e) => process.stderr.write(`[sidechat-mcp] uncaught: ${e}\n`));
+    process.on("unhandledRejection", (e) => process.stderr.write(`[sidechat-mcp] unhandled: ${e}\n`));
+    const log = (s: string) => process.stderr.write(`[sidechat-mcp] ${s}\n`);
+    const dir = `${process.cwd()}/.sidechat`;
+    const channel = createChannel({
+      fetch: scFetch,
+      notify: (content, meta) => server.notification({ method: "notifications/claude/channel", params: { content, meta } }),
+      log,
+      sidechatDir: existsSync(`${dir}/config`) ? dir : undefined,
+    });
+    // Claude Code drops pushes sent before its channel listener is up, with no
+    // error: in the 2.8.0 e2e test a push ~40 ms after `initialized` vanished,
+    // while probes from 0.5 s on all landed.
+    // ponytail: fixed 2 s margin, not a readiness signal; if startup pushes go
+    // missing, the 30-min reminder still re-surfaces them once.
+    server.oninitialized = () => { setTimeout(() => runChannel(scFetch, channel, CLIENT_BUILD_SHA, log), 2000); };
+  }
 }
 
 main().catch((err) => {

@@ -225,7 +225,7 @@ const MCP_SCHEMA_REV = 2;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.6.55";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.8.0";
 
 // --- Config from env ---
 
@@ -3403,6 +3403,11 @@ app.get("/metrics", (c) => {
     "# TYPE sidechat_sse_clients_active gauge",
     `sidechat_sse_clients_active ${sseClients.size}`,
     "",
+    "# HELP sidechat_bot_channel_connected 1 while an active bot's MCP channel holds its event stream open",
+    "# TYPE sidechat_bot_channel_connected gauge",
+    ...(db.query("SELECT name FROM clients WHERE status='active' ORDER BY name").all() as Array<{ name: string }>).map(r =>
+      `sidechat_bot_channel_connected{bot="${r.name.replace(/[\\"]/g, "\\$&")}"} ${(sseConnectionsPerSender.get(r.name) ?? 0) > 0 ? 1 : 0}`),
+    "",
     "# HELP sidechat_webhook_subscribers_active Active clients with a registered webhook URL",
     "# TYPE sidechat_webhook_subscribers_active gauge",
     `sidechat_webhook_subscribers_active ${(db.query("SELECT COUNT(*) as n FROM clients WHERE status='active' AND webhook_url IS NOT NULL").get() as any).n}`,
@@ -4643,7 +4648,10 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
     updated_at: string | null;
   }>;
   const nowMs = Date.now();
-  const payload = JSON.stringify({ now_ms: nowMs, bots: rows });
+  // A bot's only SSE connection is its MCP channel (2.8.0), so an open stream
+  // means pushes reach its session.
+  const bots = rows.map(r => ({ ...r, channel: (sseConnectionsPerSender.get(r.username) ?? 0) > 0 }));
+  const payload = JSON.stringify({ now_ms: nowMs, bots });
   return c.html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4691,13 +4699,15 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
         <th>Last poll</th>
         <th>Last inject</th>
         <th>Queue</th>
+        <th>Channel</th>
         <th>Plugin</th>
       </tr>
     </thead>
     <tbody id="rows"><!-- filled by JS so timestamps re-render every second --></tbody>
   </table>
   <p class="footnote">Last poll &lt; 30 s = healthy (green); &lt; 5 min = warn; &gt; 5 min or no heartbeat at all = stale (red).
-  "Last inject" is null on non-tmux installs &mdash; stdout-wake is the load-bearing path there.</p>
+  "Last inject" is null on non-tmux installs &mdash; stdout-wake is the load-bearing path there.
+  "Channel" is live while the bot's MCP holds its event stream open, so mentions are pushed into its session; "off" means it relies on the poller.</p>
 </div>
 <script nonce="${c.get("cspNonce")}">
   const DATA = ${payload};
@@ -4737,10 +4747,11 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
         '<td class="' + poll.cls + '">' + poll.text + '</td>' +
         '<td class="' + inj.cls + '">' + inj.text + '</td>' +
         '<td class="' + qCls + '">' + q + '</td>' +
+        '<td>' + (b.channel ? '<span class="badge ok">live</span>' : '<span class="mute">off</span>') + '</td>' +
         '<td class="mute">' + (b.plugin_version || '—') + '</td>' +
       '</tr>';
     });
-    TBODY.innerHTML = rows.join('') || '<tr><td colspan="6" class="mute">No active bots.</td></tr>';
+    TBODY.innerHTML = rows.join('') || '<tr><td colspan="7" class="mute">No active bots.</td></tr>';
   }
   render();
   setInterval(render, 1000);
@@ -5479,6 +5490,23 @@ app.post("/messages/:id/engaged", requirePostSession, (c) => {
     broadcastEvent("engaged", { id, engager });
     logEvent("message.engaged", { id, engager });
   }
+  return c.json({ status: "ok", at, server_now: at }, 200);
+});
+
+// POST /messages/:id/delivered — the bot's MCP channel pushed this mention into
+// its Claude Code session (2.8.0). Same receipt a webhook delivery records.
+app.post("/messages/:id/delivered", requirePostSession, (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (isNaN(id)) return c.json({ error: "Invalid message ID" }, 400);
+  const exists = db.query("SELECT 1 FROM messages WHERE id = ?").get(id);
+  if (!exists) return c.json({ error: "Message not found" }, 404);
+  const bot = c.get("sender") as string;
+  const at = serverNow();
+  const result = db.run(
+    "INSERT OR IGNORE INTO message_receipts (message_id, username, kind, created_at) VALUES (?, ?, ?, ?)",
+    [id, bot, "delivered", at]
+  );
+  if (result.changes > 0) broadcastEvent("delivered", { id, bot });
   return c.json({ status: "ok", at, server_now: at }, 200);
 });
 

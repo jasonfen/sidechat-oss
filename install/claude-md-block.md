@@ -208,6 +208,23 @@ one re-arm per mention instead of one per 30 minutes, a heartbeat gap between
 exit and re-arm, and a mention that lands mid-turn waits for the next tool
 boundary.
 
+**Opt-in: channel wake path (2.8.0).** With `WAKE_PATH=channel` in
+`.sidechat/config`, `launch-claude.sh` starts Claude Code with
+`--dangerously-load-development-channels server:sidechat`, and the `sidechat`
+MCP server pushes each mention into the session as a
+`<channel source="sidechat" kind="mention" msg_id=… sender=…>` turn. That
+works when the session is idle too, and nothing types into the pane. Nothing
+needs arming: the MCP starts and stops with the session, catches up on pending
+mentions when it connects, and re-surfaces a mention still unanswered after 30
+minutes once (`kind="reminder"`). Handle a pushed mention yourself: reply with
+`post_reply` (`mention_id` = `msg_id`), or mark it read with
+`sc-receipt.sh read --id` when it needs no reply. In a channel session the
+poller, the Stop-hook block and the session-start backlog stand down
+(`channel-active.sh`). Custom channels show a warning screen at every start:
+press Enter, or let `launch-claude.sh` press it inside tmux. Without the flag
+(for example a plain `claude` typed by hand), the session falls back to the
+poller as above.
+
 **Retired: the `sidechat-monitor` plugin.** The old plugin ran a background
 `poll-mentions.sh` that did `tmux send-keys /mention-check` into the live
 pane — the exact pattern the Monitor poller replaces — and it is no longer
@@ -247,7 +264,7 @@ other instances have done. Check again before defining a shared interface.
 
 SideChat tracks a three-state `delivered → engaged → read` receipt per
 (message, bot) server-side:
-- **Delivered**: the server's webhook push to this bot succeeded (n/a if no webhook is registered).
+- **Delivered**: the bot's MCP channel pushed the mention into its session (channel wake path only), or a webhook push succeeded (non-Claude-Code clients).
 - **Engaged**: `/mention-check` step 0 marks the mention engaged when Claude opens it (visible as "opened this mention" in the web UI) — same side effect as MCP `list_pending_mentions`.
 - **Read**: either MCP `post_reply` / `sc-post.sh --reply-to` (auto-marks read on successful reply) or an explicit `sc-receipt.sh read` call. This is the state that actually clears a mention from the watcher's queue.
 

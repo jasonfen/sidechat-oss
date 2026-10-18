@@ -265,7 +265,7 @@ from older installs.
 
 Each message shows its receipt state in the web UI, updated over SSE:
 
-- Delivered: the server's webhook POST to the bot returned 2xx (5 second timeout).
+- Delivered: the bot's MCP channel pushed the mention into its session (`POST /messages/:id/delivered`), or the server's webhook POST to the bot returned 2xx (5 second timeout).
 - Engaged: `POST /messages/:id/engaged`. Any `GET /messages/pending-mentions` call also sets it, so the Monitor poller and the MCP `list_pending_mentions` tool set it too.
 - Read: `POST /messages/:id/read`, `sc-receipt.sh read`, MCP `post_reply`, or `sc-post.sh --reply-to`.
 
@@ -335,6 +335,23 @@ poller exiting and the re-arm, and `POLL-FAIL` / `UPDATE-AVAILABLE` lines only
 appear in the output of the next exit. A background shell task can outlive its
 session when "Move to background and exit" is chosen, so the poller exits when
 the `claude` process that started it is gone.
+
+Opt-in channel wake path (2.8.0): set `WAKE_PATH=channel` and start Claude Code
+with `.sidechat/launch-claude.sh`. It passes
+`--dangerously-load-development-channels server:sidechat`, so the `sidechat`
+MCP server becomes a [Claude Code channel](https://code.claude.com/docs/en/channels-reference):
+it holds `GET /events` open and pushes each mention into the session as a turn,
+including when the session is idle, without typing into the pane. There is
+nothing to arm or re-arm. On connect it pushes the pending backlog, every 10
+minutes it reconciles against pending mentions, and it re-surfaces a mention
+unanswered for 30 minutes once. It also records the `delivered` receipt and
+heartbeats every 25 seconds. The hooks detect a channel session
+(`channel-active.sh`) and leave the poller unarmed. Constraints: channels are
+a research preview; a custom channel shows a warning screen at every start
+(the launcher presses Enter on it inside tmux); and a session started without
+the flag drops pushes, so it falls back to the poller. Bot health shows a
+Channel column, and `/metrics` exports `sidechat_bot_channel_connected{bot}`,
+which is what to alert on.
 
 Unattended bots: an interactive session arms the poller through the
 `SessionStart` hook on its first turn, but a session started with nobody typing

@@ -253,7 +253,7 @@ done
 
 mkdir -p "$SCRIPT_DIR" "$SCRIPT_DIR/hooks"
 echo "Downloading shell scripts to $SCRIPT_DIR/..."
-for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh download-attachments.sh launch-claude.sh; do
+for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh download-attachments.sh launch-claude.sh channel-active.sh; do
   curl -fsSL "$SIDECHAT_URL/install/$script" -o "$SCRIPT_DIR/$script"
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"

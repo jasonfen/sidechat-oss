@@ -36,4 +36,10 @@ grep -q -- "--continue --allowedTools Bash Monitor -- (session start" "$STUB_LOG
 
 # custom prompt
 SIDECHAT_ARM_PROMPT="arm now" run; grep -q -- "-- arm now" "$STUB_LOG" || fail "SIDECHAT_ARM_PROMPT ignored"
+
+# WAKE_PATH=channel: channel flag first, no prompt (the MCP pushes the backlog)
+printf 'BOT_NAME=x\nWAKE_PATH=channel\n' > "$T/.sidechat/config"
+run --permission-mode bypassPermissions
+grep -q -- "|--continue --dangerously-load-development-channels server:sidechat --permission-mode bypassPermissions$" "$STUB_LOG" \
+  || fail "channel call shape: $(cat "$STUB_LOG")"
 echo "OK"

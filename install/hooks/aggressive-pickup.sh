@@ -35,6 +35,8 @@ source "$CONFIG"
 [ "${AGGRESSIVE_PICKUP:-0}" = "1" ] || exit 0
 
 [ -n "${TOKEN:-}" ] && [ -n "${SERVER_URL:-}" ] || exit 0
+# Channel session (2.8.0): mentions already arrive as pushed turns.
+"$SCRIPT_DIR/channel-active.sh" && exit 0
 
 HOURS="${SIDECHAT_POLL_HOURS:-72}"
 RESPONSE="$(curl -sf --max-time 5 -H "Authorization: Bearer $TOKEN" \

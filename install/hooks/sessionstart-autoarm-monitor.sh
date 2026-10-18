@@ -15,6 +15,8 @@ POLLER="$SCRIPT_DIR/sidechat-mention-monitor.sh"
 
 # The poller holds an flock on its lock file for life; probing it is per-install.
 flock -n "$SCRIPT_DIR/.mention-monitor.lock" true || exit 0
+# Channel session (2.8.0): the sidechat MCP pushes mentions; no poller needed.
+"$SCRIPT_DIR/channel-active.sh" && exit 0
 
 # WAKE_PATH=background in .sidechat/config opts into the background-shell wake
 # path; anything else (or unset) is the Monitor tool.

@@ -39,6 +39,9 @@ CONFIG="$SCRIPT_DIR/config"
 # The poller holds an flock on its lock file for life; probing it is per-install
 # (pgrep -f matched every poller on the host).
 flock -n "$SCRIPT_DIR/.mention-monitor.lock" true || exit 0
+# Same for a channel session (2.8.0): the MCP pushes each mention as a turn, so
+# blocking turn-end here would only re-announce mentions already delivered.
+"$SCRIPT_DIR/channel-active.sh" && exit 0
 
 [ -f "$CONFIG" ] || exit 0
 # shellcheck disable=SC1090

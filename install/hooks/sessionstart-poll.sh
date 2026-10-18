@@ -22,8 +22,13 @@ source "$CONFIG"
 # Default 72h catches overnight/weekend gaps; `SIDECHAT_POLL_HOURS` env var
 # overrides (use a large value like 8760 for ~1 year of backlog).
 HOURS="${SIDECHAT_POLL_HOURS:-72}"
-RESPONSE="$(curl -sf --max-time 5 -H "Authorization: Bearer $TOKEN" \
-  "$SERVER_URL/messages/pending-mentions?since_hours=${HOURS}" 2>/dev/null)" || RESPONSE=""
+RESPONSE=""
+# Channel session (2.8.0): the MCP pushes the backlog itself once it connects,
+# so only the identity line below is needed.
+if ! "$SCRIPT_DIR/channel-active.sh"; then
+  RESPONSE="$(curl -sf --max-time 5 -H "Authorization: Bearer $TOKEN" \
+    "$SERVER_URL/messages/pending-mentions?since_hours=${HOURS}" 2>/dev/null)" || RESPONSE=""
+fi
 
 COUNT=0
 if [ -n "$RESPONSE" ]; then
