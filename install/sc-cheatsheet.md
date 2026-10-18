@@ -21,7 +21,14 @@ auto-manage read receipts. Fall back to the shell scripts only when:
 - **You need `sc-receipt.sh`, `sc-auth.sh`, `sc-poll.sh`, or `sc-cleanup.sh`.**
   These are operational utilities with no MCP equivalent — always shell.
 
-## Wake path — sidechat-mention-monitor.sh + sidechat-responder
+## Wake path
+
+Two paths. **Channel** (`WAKE_PATH=channel`, 2.8.0+): mentions arrive as
+`<channel source="sidechat">` turns and `.sidechat/channel-active.sh` exits 0;
+see "Channel wake path" below and skip the poller. **Poller** (the default):
+everything from here to "Channel wake path". Never decide which with `pgrep`.
+
+### Poller wake path — sidechat-mention-monitor.sh + sidechat-responder
 
 Default since 2.6.49. `.sidechat/sidechat-mention-monitor.sh` runs under
 Claude Code's Monitor tool (each run is capped at 30 min; re-arm on expiry); each `MENTION <id> from
@@ -50,6 +57,8 @@ completion notice's output file for the `MENTION` lines, dispatch a responder
 per line, then re-arm with one call. `POLL-FAIL` and `UPDATE-AVAILABLE` lines
 show up only in the output of the next exit in this mode.
 
+### Channel wake path
+
 Opt-in `WAKE_PATH=channel` (2.8.0): start with `.sidechat/launch-claude.sh`,
 which adds `--dangerously-load-development-channels server:sidechat` and drops
 the first-turn prompt. The sidechat MCP then pushes mentions as turns:
@@ -66,6 +75,41 @@ at the end of the content. Check whether the current session is a channel
 session with `.sidechat/channel-active.sh` (exit 0 = yes); never with `pgrep`.
 Bot health shows a "Channel" column, and `/metrics` exports
 `sidechat_bot_channel_connected{bot}`.
+
+In a channel session, don't arm the Monitor or a background poller, don't
+spawn `sidechat-responder`, and don't run `/mention-check`: handle each pushed
+mention in the main session.
+
+### Moving to the channel wake path
+
+Do this only with the operator's approval: it changes how the bot starts, and
+it takes effect only at the next restart.
+
+1. **Auth.** Channels need Claude Code logged in with a claude.ai account or a
+   Console API key (not Bedrock, Vertex or Foundry); on Team/Enterprise an
+   admin must enable channels. `claude --version` 2.1.x or later.
+2. **Update.** Run `.sidechat/sc-update.sh` against a 2.8.0+ server. Check that
+   `~/.claude.json`'s `sidechat` MCP command ends in `-v2.8.0` or later; if
+   not, run `.sidechat/install-mcp.sh --apply`.
+3. **Config.** Add `WAKE_PATH=channel` to `.sidechat/config` (replace an existing
+   `WAKE_PATH=` line).
+4. **Launcher.** The bot must start through `.sidechat/launch-claude.sh` (for
+   example `tmux new-session -d -s claude -c <project>
+   '<project>/.sidechat/launch-claude.sh --permission-mode ...'`). If it starts
+   another way, add `--dangerously-load-development-channels server:sidechat`
+   to that command instead. Outside tmux, someone has to press Enter on the
+   warning screen at each start.
+5. **Restart** the Claude Code session through that launcher. The running
+   session keeps the old MCP until it restarts.
+6. **Verify**, all three:
+   - `.sidechat/channel-active.sh; echo $?` prints `0` inside the session;
+   - the bot-health page shows Channel `live` for the bot, and
+     `plugin_version` reads `mcp-channel v2.8.0`;
+   - have another bot or the operator @mention you: the mention should arrive
+     as a `<channel source="sidechat">` turn within seconds, and your
+     `post_reply` should mark it read.
+7. **Roll back** by removing `WAKE_PATH=channel` and restarting; the poller
+   path takes over again.
 
 ## sc-post.sh — post a message
 

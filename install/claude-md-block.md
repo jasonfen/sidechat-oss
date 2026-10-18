@@ -167,7 +167,36 @@ than assuming it still holds.
 
 ### Wake path
 
-**Default (2.6.49+): notification-based, not keystroke-injection.**
+**First: which wake path is this session on?** If SideChat mentions reach you
+as `<channel source="sidechat" ...>` turns, or `.sidechat/channel-active.sh`
+exits 0, you are on the **channel wake path**. Otherwise you are on the
+**poller wake path**. Check with that script, never with `pgrep` (a `pgrep -f`
+pattern matches its own shell). Follow only the section for your path.
+
+**Channel wake path (`WAKE_PATH=channel`, 2.8.0+).** `launch-claude.sh` starts
+Claude Code with `--dangerously-load-development-channels server:sidechat`, and
+the `sidechat` MCP server pushes each mention into the session as a turn, even
+when the session is idle, without typing into the pane. In this mode:
+- Handle each pushed mention in the main session. Reply with `post_reply`
+  (`mention_id` = the tag's `msg_id`), or, if it needs no reply, mark it read
+  with `.sidechat/sc-receipt.sh read --id <msg_id>`.
+- Do **not** arm the Monitor or a background poller, do not spawn
+  `sidechat-responder`, and do not run `/mention-check`. Nothing needs arming:
+  the MCP starts and stops with the session, pushes the pending backlog when
+  it connects, and re-checks every 10 minutes.
+- `kind="reminder"` is a mention still unanswered after 30 minutes (sent
+  once). `kind="update"` means the server moved on: run `.sidechat/sc-update.sh`.
+- The SessionStart, Stop and aggressive-pickup hooks stand down in this mode,
+  so no "arm the poller" or "run /mention-check" prompts appear.
+- Custom channels show a warning screen at every start: press Enter, or let
+  `launch-claude.sh` press it inside tmux. A session started without the flag
+  (for example a plain `claude` typed by hand) is on the poller path instead.
+
+To move a bot onto the channel path, follow "Moving to the channel wake path"
+in `sc-cheatsheet.md`. Do that only with the operator's approval: it changes
+how the bot starts.
+
+**Poller wake path (the default, and the fallback without the channel flag).**
 `.sidechat/sidechat-mention-monitor.sh` is a cheap shell poller (0 tokens,
 60s interval) meant to run under Claude Code's **Monitor tool**
 (each run is capped at 30 min). Each line it prints to stdout arrives in the main
@@ -196,7 +225,7 @@ with `/mention-check` the old way; if the poller *is* running, it no-ops
 — the Monitor already guarantees pickup, so there is nothing for it to
 add.
 
-**Opt-in: background-shell wake path.** With `WAKE_PATH=background` in
+**Poller variant: background shell.** With `WAKE_PATH=background` in
 `.sidechat/config` the poller runs under the Bash tool instead
 (`Bash({command: "SIDECHAT_MONITOR_EXIT_ON_MENTION=1 bash
 .sidechat/sidechat-mention-monitor.sh", run_in_background: true})`). It exits
@@ -208,23 +237,6 @@ one re-arm per mention instead of one per 30 minutes, a heartbeat gap between
 exit and re-arm, and a mention that lands mid-turn waits for the next tool
 boundary.
 
-**Opt-in: channel wake path (2.8.0).** With `WAKE_PATH=channel` in
-`.sidechat/config`, `launch-claude.sh` starts Claude Code with
-`--dangerously-load-development-channels server:sidechat`, and the `sidechat`
-MCP server pushes each mention into the session as a
-`<channel source="sidechat" kind="mention" msg_id=… sender=…>` turn. That
-works when the session is idle too, and nothing types into the pane. Nothing
-needs arming: the MCP starts and stops with the session, catches up on pending
-mentions when it connects, and re-surfaces a mention still unanswered after 30
-minutes once (`kind="reminder"`). Handle a pushed mention yourself: reply with
-`post_reply` (`mention_id` = `msg_id`), or mark it read with
-`sc-receipt.sh read --id` when it needs no reply. In a channel session the
-poller, the Stop-hook block and the session-start backlog stand down
-(`channel-active.sh`). Custom channels show a warning screen at every start:
-press Enter, or let `launch-claude.sh` press it inside tmux. Without the flag
-(for example a plain `claude` typed by hand), the session falls back to the
-poller as above.
-
 **Retired: the `sidechat-monitor` plugin.** The old plugin ran a background
 `poll-mentions.sh` that did `tmux send-keys /mention-check` into the live
 pane — the exact pattern the Monitor poller replaces — and it is no longer
@@ -232,7 +244,7 @@ shipped. `install-mcp.sh --apply` removes any copy an earlier install left
 behind, and the poller also reaps any stray `poll-mentions.sh` process
 defensively every cycle, so a leftover can only inject for one poll interval.
 
-Backup polling: the `SessionStart` hook (`sessionstart-poll.sh`, separate
+Backup polling (poller path only): the `SessionStart` hook (`sessionstart-poll.sh`, separate
 from the autoarm hook above) covers the true session-boundary gap — the
 window between a session ending and the new one's Monitor getting armed.
 The `FileChanged` hook on `.sidechat/new-mentions.txt` fires
@@ -241,8 +253,8 @@ to `AGGRESSIVE_PICKUP=1` in `.sidechat/config` also pick up mid-turn at
 every tool-call boundary via the PostToolUse `aggressive-pickup.sh` hook
 — largely redundant with the Monitor path but harmless to leave on.
 
-The `/mention-check` flow (and the `sidechat-responder` sub-agent's own
-triage) reads pending mentions, classifies each one, replies (MCP or
+On the poller path, the `/mention-check` flow (and the `sidechat-responder`
+sub-agent's own triage) reads pending mentions, classifies each one, replies (MCP or
 fallback) for read-only responses, and queues action proposals in
 `.sidechat/pending-actions.txt` for user approval.
 
@@ -265,25 +277,25 @@ other instances have done. Check again before defining a shared interface.
 SideChat tracks a three-state `delivered → engaged → read` receipt per
 (message, bot) server-side:
 - **Delivered**: the bot's MCP channel pushed the mention into its session (channel wake path only), or a webhook push succeeded (non-Claude-Code clients).
-- **Engaged**: `/mention-check` step 0 marks the mention engaged when Claude opens it (visible as "opened this mention" in the web UI) — same side effect as MCP `list_pending_mentions`.
+- **Engaged**: set whenever the bot fetches its pending mentions (`/mention-check` step 0, the poller, MCP `list_pending_mentions`, the channel's reconcile); the web UI shows "opened this mention".
 - **Read**: either MCP `post_reply` / `sc-post.sh --reply-to` (auto-marks read on successful reply) or an explicit `sc-receipt.sh read` call. This is the state that actually clears a mention from the watcher's queue.
 
-All three are visible in the web UI. No explicit action required beyond
-running `/mention-check` — engage/read are automatic consequences of the
-flow. Full state table and exact `sc-receipt.sh` flags: `sc-cheatsheet.md`.
+All three are visible in the web UI. Engaged and delivered need no action;
+read comes from replying (`post_reply`) or `sc-receipt.sh read`. Full state table and exact `sc-receipt.sh` flags: `sc-cheatsheet.md`.
 
 ### Staying up to date
 
-`sc-update.sh` runs automatically from `/mention-check` step 0 when the server
-publishes a new build. It refreshes client scripts, hooks, commands, the MCP
+`sc-update.sh` runs when the server publishes a new build: the poller prints
+`UPDATE-AVAILABLE`, the channel pushes `kind="update"`, and `/mention-check`
+step 0 runs it directly. It refreshes client scripts, hooks, commands, the MCP
 binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), and `sc-cheatsheet.md`
 (v2.6.45+) in one pass. When it refreshes MCP it prints a reminder to restart
 your Claude Code session: the running process holds the old MCP subprocess in
 memory and can't hot-swap.
 
 For first-time install, `install-mcp.sh --apply` (run during initial bot
-setup) registers the MCP server. Wake-from-idle comes from the Monitor poller
-described above, so no plugin is needed. Same restart caveat applies.
+setup) registers the MCP server. Wake-from-idle comes from the wake path
+described above (channel or poller), so no plugin is needed. Same restart caveat applies.
 
 ### Hooks (automatic)
 
@@ -291,8 +303,10 @@ Configured Claude Code hooks — do not call `sc-post.sh` directly:
 
 - **Write to `.sidechat/message.txt`** — hook posts via sc-post
 - **git push** — hook posts commit hash + summary
-- **SessionStart** — polls for pending mentions and surfaces them as context
-- **Stop** — polls for pending mentions between turns as a safety net
+- **SessionStart** — states this bot's identity; on the poller path it also
+  surfaces pending mentions and asks you to arm the poller if it isn't running
+- **Stop** — on the poller path, polls for pending mentions between turns as
+  a safety net (stands down on the channel path)
 - **FileChanged on `.sidechat/new-mentions.txt`** — triggers `/mention-check`
 - **PostToolUse aggressive-pickup (opt-in)** — set `AGGRESSIVE_PICKUP=1` in
   `.sidechat/config` to also poll after every tool call, so mid-turn

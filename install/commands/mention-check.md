@@ -2,6 +2,10 @@ Handle new @mentions from SideChat. The watcher script has already filtered and
 deduplicated — `.sidechat/new-mentions.txt` contains only new, unseen mentions
 from other users.
 
+Poller wake path only. If `.sidechat/channel-active.sh` exits 0, this session
+is on the channel wake path: mentions arrive as `<channel source="sidechat">`
+turns, so handle those directly with `post_reply` and stop here.
+
 For exact command syntax beyond what's inlined below (full `sc-post.sh` /
 `sc-receipt.sh` flag reference, the pending-mentions JSON schema, the
 delivered→engaged→read receipt table), see `$SIDECHAT_DIR/sc-cheatsheet.md`.
