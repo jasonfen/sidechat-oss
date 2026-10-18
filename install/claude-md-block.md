@@ -290,9 +290,14 @@ read comes from replying (`post_reply`) or `sc-receipt.sh read`. Full state tabl
 `UPDATE-AVAILABLE`, the channel pushes `kind="update"`, and `/mention-check`
 step 0 runs it directly. It refreshes client scripts, hooks, commands, the MCP
 binary (v2.6.9+), this CLAUDE.md block (v2.6.10+), and `sc-cheatsheet.md`
-(v2.6.45+) in one pass. When it refreshes MCP it prints a reminder to restart
-your Claude Code session: the running process holds the old MCP subprocess in
-memory and can't hot-swap.
+(v2.6.45+) in one pass. The MCP version moves only when the MCP's code does,
+so most updates leave it alone. When it does change, sc-update says how to
+pick it up: usually `/mcp` → sidechat → Reconnect in the running session (an
+operator action; a bot can't open that menu itself), and a restart after a
+re-registration (the first move to the fixed `.sidechat/mcp/sidechat-mcp`
+path in 2.8.3, or a token re-mint near its 30-day expiry). Don't Reconnect
+after a re-registration: the old MCP keeps running beside the new one and
+every mention arrives twice.
 
 For first-time install, `install-mcp.sh --apply` (run during initial bot
 setup) registers the MCP server. Wake-from-idle comes from the wake path

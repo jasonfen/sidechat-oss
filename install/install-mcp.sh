@@ -24,9 +24,11 @@
 #   ./install-mcp.sh --apply              # runs the `claude mcp add` itself
 #   ./install-mcp.sh --name <n>           # override MCP server name (default: sidechat)
 #   ./install-mcp.sh --no-binary          # skip binary probe, force bun-run path
+#   ./install-mcp.sh --binary-only        # fetch the server's MCP binary and repoint
+#                                         # .sidechat/mcp/sidechat-mcp; no token, no registration
 #
-# The minted token inherits SideChat's SESSION_TTL_HOURS (24h by default).
-# Re-run this script when the token expires and the MCP server starts 401ing.
+# The minted scope=mcp token lasts MCP_SESSION_TTL_HOURS (30 days by default).
+# sc-update.sh re-runs --apply when it is within 7 days of expiry.
 
 set -euo pipefail
 
@@ -57,12 +59,14 @@ APPLY=false
 MCP_NAME="sidechat"
 SERVER_SRC_DIR_OVERRIDE=""
 USE_BINARY=true
+BINARY_ONLY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=true; shift ;;
     --name) MCP_NAME="$2"; shift 2 ;;
     --server-src-dir) SERVER_SRC_DIR_OVERRIDE="$2"; shift 2 ;;
     --no-binary) USE_BINARY=false; shift ;;
+    --binary-only) BINARY_ONLY=true; shift ;;
     -*) echo "Unknown option: $1" >&2; exit 1 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -176,7 +180,15 @@ if $USE_BINARY; then
       fi
     fi
 
-    [[ -x "$CACHED_BIN" ]] && MCP_BIN="$CACHED_BIN"
+    # Register a fixed path, not the versioned file (2.8.3). An update then only
+    # repoints this link, the registration stays byte-identical, and /mcp ->
+    # Reconnect swaps the running MCP cleanly. If the registered command or env
+    # changes, Reconnect starts the new MCP but leaves the old one running and
+    # pushing into the session until it exits (tested on Claude Code 2.1.302).
+    if [[ -x "$CACHED_BIN" ]]; then
+      ln -sfn "$(basename "$CACHED_BIN")" "$BIN_CACHE/sidechat-mcp"
+      MCP_BIN="$BIN_CACHE/sidechat-mcp"
+    fi
 
     # Prune superseded cached binaries. Each sidechat-mcp binary is ~98 MB and
     # this script historically never cleaned them, so .sidechat/mcp/ grew by one
@@ -195,6 +207,12 @@ if $USE_BINARY; then
       done
     fi
   fi
+fi
+
+if $BINARY_ONLY; then
+  [[ -n "$MCP_BIN" ]] || { echo "ERROR: --binary-only: no release binary for this platform." >&2; exit 1; }
+  echo "  $MCP_BIN -> $(readlink "$MCP_BIN")"
+  exit 0
 fi
 
 # --- Source-tree fallback (used when MCP_BIN is empty) ---------------------
@@ -310,6 +328,7 @@ if $APPLY; then
   # Remove any previous registration so --apply is idempotent.
   claude mcp remove "$MCP_NAME" -s user >/dev/null 2>&1 || true
   "${CMD[@]}"
+  mkdir -p "$BIN_CACHE" && echo "$EXPIRES" > "$BIN_CACHE/token-expires"
   echo ""
   echo "  Done. Verify with: claude mcp list"
 

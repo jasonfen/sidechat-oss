@@ -224,26 +224,52 @@ fi
 
 # MCP client binary drift probe. sc-update.sh syncs install-mcp.sh to disk but
 # doesn't run it; the registered MCP subprocess stays pinned to whatever
-# version the operator last installed. Pre-2.6.9 that gap went unnoticed
-# because /mention-check never reached for the MCP tool surface. Now: compare
-# the version embedded in ~/.claude.json's sidechat-mcp command path against
-# the server's expected_client_build_sha and refresh on drift. The running CC
-# session still holds the old subprocess in memory; user must restart CC to
-# see the new tool surface.
+# version the operator last installed. Compare the registered version against
+# the server's expected_client_build_sha and refresh on drift.
+#
+# 2.8.3+ registers the fixed link .sidechat/mcp/sidechat-mcp, whose target
+# carries the version. On drift only the link moves (install-mcp.sh
+# --binary-only): the registration stays identical, so /mcp -> Reconnect picks
+# up the new binary without a restart. A full --apply (new token, changed
+# registration) needs a restart, because Reconnect would leave the old MCP
+# running beside the new one; it runs only to move an older install onto the
+# link, or to re-mint a token within 7 days of expiry.
 if command -v jq &>/dev/null && [[ -f "$HOME/.claude.json" ]] && [[ -x "$SCRIPT_DIR/install-mcp.sh" ]]; then
   CURRENT_MCP_CMD=$(jq -r '.mcpServers.sidechat.command // empty' "$HOME/.claude.json" 2>/dev/null)
   if [[ -n "$CURRENT_MCP_CMD" ]]; then
+    STABLE_MCP=false
+    MCP_FILE="$CURRENT_MCP_CMD"
+    if [[ "$(basename "$CURRENT_MCP_CMD")" == sidechat-mcp && -L "$CURRENT_MCP_CMD" ]]; then
+      STABLE_MCP=true
+      MCP_FILE=$(readlink "$CURRENT_MCP_CMD")
+    fi
     # Binary filename ends in -v<VERSION>; legacy/dev paths without that
     # suffix are treated as drift so the next run lands on a versioned binary.
-    CURRENT_MCP_VER=$(basename "$CURRENT_MCP_CMD" | sed -n 's/.*-v\([0-9][0-9.]*\)$/\1/p')
+    CURRENT_MCP_VER=$(basename "$MCP_FILE" | sed -n 's/.*-v\([0-9][0-9.]*\)$/\1/p')
     SERVER_EXPECTS=$(curl -fsS --max-time 3 "$SERVER_URL/install/mcp-version" 2>/dev/null \
       | jq -r '.expected_client_build_sha // empty' 2>/dev/null)
-    if [[ -n "$SERVER_EXPECTS" && "$CURRENT_MCP_VER" != "$SERVER_EXPECTS" ]]; then
-      echo "MCP drift: registered=v${CURRENT_MCP_VER:-<none>}, server expects=v$SERVER_EXPECTS. Refreshing..."
+    MCP_DRIFT=false
+    [[ -n "$SERVER_EXPECTS" && "$CURRENT_MCP_VER" != "$SERVER_EXPECTS" ]] && MCP_DRIFT=true
+    TOKEN_DUE=false
+    TOKEN_EXPIRES=$(cat "$SCRIPT_DIR/mcp/token-expires" 2>/dev/null || true)
+    if [[ -n "$TOKEN_EXPIRES" ]]; then
+      TOKEN_DAYS=$(jq -rn --arg e "$TOKEN_EXPIRES" '(($e | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - now) / 86400 | floor' 2>/dev/null || true)
+      [[ -n "$TOKEN_DAYS" && "$TOKEN_DAYS" -lt 7 ]] && TOKEN_DUE=true
+    fi
+    if $TOKEN_DUE || { ! $STABLE_MCP && { $MCP_DRIFT || [[ -n "$CURRENT_MCP_VER" ]]; }; }; then
+      if $TOKEN_DUE; then echo "MCP token expires $TOKEN_EXPIRES. Re-registering..."
+      else echo "MCP: registered=v${CURRENT_MCP_VER:-<none>}, server expects=v${SERVER_EXPECTS:-?}; moving to the fixed .sidechat/mcp/sidechat-mcp path..."; fi
       if SIDECHAT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/install-mcp.sh" --apply >/dev/null 2>&1; then
-        echo "  ⚠ MCP binary updated to v$SERVER_EXPECTS. Restart your Claude Code session to pick up the new tool surface (the running process still holds the old MCP subprocess)."
+        echo "  ⚠ MCP re-registered. Restart your Claude Code session to pick it up (/mcp Reconnect isn't enough this time: the registration changed, and the old MCP would keep running beside the new one)."
       else
         echo "  MCP refresh failed (run install-mcp.sh --apply manually)."
+      fi
+    elif $MCP_DRIFT; then
+      echo "MCP drift: registered=v${CURRENT_MCP_VER:-<none>}, server expects=v$SERVER_EXPECTS. Refreshing..."
+      if SIDECHAT_DIR="$SCRIPT_DIR" bash "$SCRIPT_DIR/install-mcp.sh" --binary-only >/dev/null 2>&1; then
+        echo "  ⚠ MCP binary updated to v$SERVER_EXPECTS. Pick it up without a restart: in each running Claude Code session, /mcp -> sidechat -> Reconnect (a restart also works)."
+      else
+        echo "  MCP refresh failed (run install-mcp.sh --binary-only manually)."
       fi
     fi
   fi
