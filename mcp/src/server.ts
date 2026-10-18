@@ -302,10 +302,8 @@ async function probeAndLogDrift() {
 }
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  process.stderr.write(`[sidechat-mcp] connected to ${SIDECHAT_URL}\n`);
-  await probeAndLogDrift();
+  // Set before connect: `initialized` can arrive during the awaits below, and
+  // a handler set after it never fires (a slow link lost the whole channel).
   if (CHANNEL) {
     // Claude Code never restarts a dead stdio server, so the channel must not
     // take the process down.
@@ -326,6 +324,10 @@ async function main() {
     // missing, the 30-min reminder still re-surfaces them once.
     server.oninitialized = () => { setTimeout(() => runChannel(scFetch, channel, CLIENT_BUILD_SHA, log), 2000); };
   }
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  process.stderr.write(`[sidechat-mcp] connected to ${SIDECHAT_URL}\n`);
+  await probeAndLogDrift();
 }
 
 main().catch((err) => {
