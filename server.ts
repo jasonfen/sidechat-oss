@@ -4394,7 +4394,7 @@ app.get("/admin", requireAdmin, (c) => {
   function renderActive(clients) {
     document.getElementById('active-count').textContent = '(' + clients.length + ')';
     if (!clients.length) { document.getElementById('active-body').innerHTML = '<div class="empty">No active clients</div>'; return; }
-    var html = '<table><tr><th>Name</th><th>Fingerprint</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Webhook</th><th>Version</th><th>Actions</th></tr>';
+    var html = '<table><tr><th>Name</th><th>Fingerprint</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Webhook</th><th>Version</th><th title="A reply to their message counts as a mention of them">Reply = mention</th><th>Actions</th></tr>';
     clients.forEach(function(c) {
       var ver = c.last_known_version || '';
       var verBadge = '';
@@ -4408,6 +4408,7 @@ app.get("/admin", requireAdmin, (c) => {
       html += '<tr><td>' + esc(c.name) + '</td><td class="fp">' + esc(c.fingerprint.slice(0,16)) + '&hellip;</td><td>' + (c.can_post ? 'yes' : 'no') + '</td><td>' + relTime(c.last_seen) + '</td><td>' + esc(c.last_ip || '') + '</td>';
       html += '<td>' + (c.webhook_url ? '<span class="fp" title="' + esc(c.webhook_url) + '">webhook</span> ' : '') + '</td>';
       html += '<td>' + verBadge + '</td>';
+      html += '<td>' + replyMentionBtn(c.auto_mention_replies_to_me, 'reply-mention', 'data-fingerprint="' + esc(c.fingerprint) + '"') + '</td>';
       html += '<td><button class="btn btn-revoke" data-admin-action="revoke" data-fingerprint="' + esc(c.fingerprint) + '">Revoke</button>';
       if (c.webhook_url) html += ' <button class="btn" data-admin-action="clear-webhook" data-fingerprint="' + esc(c.fingerprint) + '">Clear Webhook</button>';
       html += '</td></tr>';
@@ -4416,15 +4417,22 @@ app.get("/admin", requireAdmin, (c) => {
     document.getElementById('active-body').innerHTML = html;
   }
 
+  // On/off toggle for "a reply to my message mentions me" (default on).
+  function replyMentionBtn(v, action, idAttr) {
+    var on = v !== 0;
+    return '<button class="btn" title="Click to turn ' + (on ? 'off' : 'on') + '" data-admin-action="' + action + '" ' + idAttr + '>' + (on ? 'on' : 'off') + '</button>';
+  }
+
   function renderObservers(observers) {
     document.getElementById('obs-count').textContent = '(' + observers.length + ')';
     if (!observers.length) { document.getElementById('obs-body').innerHTML = '<div class="empty">No observers</div>'; return; }
-    var html = '<table><tr><th>Username</th><th>Role</th><th>Status</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th>Actions</th></tr>';
+    var html = '<table><tr><th>Username</th><th>Role</th><th>Status</th><th>Can Post</th><th>Last Seen</th><th>Last IP</th><th title="A reply to their message counts as a mention of them">Reply = mention</th><th>Actions</th></tr>';
     observers.forEach(function(o) {
       var statusBadge = '<span class="badge ' + o.status + '">' + o.status + '</span>';
       var role = o.role || 'observer';
       var roleBadge = '<span class="badge ' + (role === 'admin' ? 'role-admin' : 'role-observer') + '">' + role + '</span>';
       html += '<tr><td>' + esc(o.username) + '</td><td>' + roleBadge + '</td><td>' + statusBadge + '</td><td>' + (o.can_post ? 'yes' : 'no') + '</td><td>' + relTime(o.last_seen) + '</td><td>' + esc(o.last_ip || '') + '</td>';
+      html += '<td>' + replyMentionBtn(o.auto_mention_replies_to_me, 'observer-reply-mention', 'data-observer-id="' + esc(String(o.id)) + '"') + '</td>';
       if (o.status === 'active') {
         var actions = '';
         if (role === 'admin') {
@@ -4507,8 +4515,8 @@ app.get("/admin", requireAdmin, (c) => {
     if (action) {
       var fp = t.getAttribute('data-fingerprint');
       var oid = t.getAttribute('data-observer-id');
-      if ((action === 'observer-revoke' || action === 'observer-promote' || action === 'observer-demote') && oid) {
-        var verb = action.split('-')[1];  // revoke | promote | demote
+      if (action.indexOf('observer-') === 0 && oid) {
+        var verb = action.slice('observer-'.length);  // revoke | promote | demote | reply-mention
         adminAction('/admin/observers/' + encodeURIComponent(oid) + '/' + verb, refresh);
       } else if (fp) {
         adminAction('/admin/clients/' + encodeURIComponent(fp) + '/' + action, refresh);
@@ -4884,11 +4892,11 @@ function getInstallURLs(): string[] {
 
 // GET /admin/data — admin auth required
 app.get("/admin/data", requireAdmin, async (c) => {
-  const CLIENT_COLS = "id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url, last_known_version";
+  const CLIENT_COLS = "id, name, fingerprint, status, can_post, source_ip, registered_at, approved_at, last_seen, last_ip, webhook_url, last_known_version, auto_mention_replies_to_me";
   const pending = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'pending' ORDER BY registered_at DESC`).all();
   const active = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'active' ORDER BY last_seen DESC`).all();
   const revoked = db.query(`SELECT ${CLIENT_COLS} FROM clients WHERE status = 'revoked'`).all();
-  const observersList = db.query("SELECT id, username, status, can_post, role, created_at, last_seen, last_ip FROM observers ORDER BY created_at DESC").all();
+  const observersList = db.query("SELECT id, username, status, can_post, role, created_at, last_seen, last_ip, auto_mention_replies_to_me FROM observers ORDER BY created_at DESC").all();
   const installURLs = getInstallURLs();
 
   const fileStorageUsed = getTotalFileStorage();
@@ -4943,6 +4951,17 @@ app.post("/admin/clients/:fingerprint/clear-webhook", requireAdmin, async (c) =>
   db.run("UPDATE clients SET webhook_url = NULL, webhook_secret = NULL WHERE fingerprint = ?", [fp]);
   logEvent("webhook.cleared", { fingerprint: fp, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
   return c.json({ status: "webhook_cleared" });
+});
+
+// POST /admin/clients/:fingerprint/reply-mention — toggle whether a reply to
+// this client's message implicitly @-mentions it (auto_mention_replies_to_me).
+app.post("/admin/clients/:fingerprint/reply-mention", requireAdmin, async (c) => {
+  const fp = c.req.param("fingerprint");
+  db.run("UPDATE clients SET auto_mention_replies_to_me = 1 - auto_mention_replies_to_me WHERE fingerprint = ?", [fp]);
+  const row = db.query("SELECT name, auto_mention_replies_to_me AS v FROM clients WHERE fingerprint = ?").get(fp) as any;
+  if (!row) return c.json({ error: "Client not found" }, 404);
+  logEvent("client.reply_mention", { fingerprint: fp, username: row.name, on: row.v === 1, admin_session_id: adminSessionIdShort(c.get("admin_session_token") as string) });
+  return c.json({ status: row.v === 1 ? "on" : "off" });
 });
 
 // POST /admin/observers — create observer
@@ -5024,6 +5043,17 @@ app.post("/admin/observers/:id/revoke", requireAdmin, async (c) => {
     ip,
   });
   return c.json({ status: "revoked" });
+});
+
+// POST /admin/observers/:id/reply-mention — same toggle for an observer.
+app.post("/admin/observers/:id/reply-mention", requireAdmin, async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  if (!Number.isFinite(id)) return c.json({ error: "Invalid id" }, 400);
+  db.run("UPDATE observers SET auto_mention_replies_to_me = 1 - auto_mention_replies_to_me WHERE id = ?", [id]);
+  const row = db.query("SELECT username, auto_mention_replies_to_me AS v FROM observers WHERE id = ?").get(id) as any;
+  if (!row) return c.json({ error: "Observer not found" }, 404);
+  logEvent("observer.reply_mention", { actor_observer_id: c.get("admin_observer_id"), target_username: row.username, on: row.v === 1 });
+  return c.json({ status: row.v === 1 ? "on" : "off" });
 });
 
 // POST /admin/observers/:id/promote — make observer an admin
