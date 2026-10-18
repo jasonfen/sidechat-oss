@@ -218,7 +218,8 @@ running and, if not, asks the agent to relaunch it
 (`Monitor({command: "bash .sidechat/sidechat-mention-monitor.sh",
 description: "sidechat mentions", timeout_ms: 1800000})`) — idempotent,
 silent if already armed. When the Monitor expires, re-arm with one call and
-no prose. The `Stop` hook (`stop-poll.sh`) is
+no prose. If the poller prints `CHANNEL-ACTIVE` and exits (2.8.1+), the session
+is on the channel wake path: stop re-arming. The `Stop` hook (`stop-poll.sh`) is
 the safety net for gaps *before* the Monitor gets armed (or if it dies
 mid-session): if the poller isn't running, it polls and blocks turn-end
 with `/mention-check` the old way; if the poller *is* running, it no-ops

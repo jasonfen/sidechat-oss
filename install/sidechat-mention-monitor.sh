@@ -39,6 +39,14 @@ NAG_AFTER="${SIDECHAT_MONITOR_NAG_AFTER:-900}"
 # never keeps stale code. exec keeps the PID, so the Monitor task is unaffected.
 SELF_HASH=$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)
 
+# On the channel wake path (2.8.0) the sidechat MCP pushes mentions into the
+# session, so a poller would only duplicate them. The flag is fixed for the
+# session's life, so checking once at arm time is enough.
+if "$SIDECHAT_DIR/channel-active.sh" 2>/dev/null; then
+  echo "CHANNEL-ACTIVE — mentions arrive as channel pushes in this session; the poller is not needed. Do not re-arm."
+  exit 0
+fi
+
 # Singleton guard — only one poller at a time no matter how many times armed
 # (SessionStart auto-arm must never stack a second instance onto a manual
 # launch). fd 9 holds the exclusive lock for the life of the process.

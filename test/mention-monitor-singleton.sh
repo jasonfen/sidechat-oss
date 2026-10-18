@@ -1,11 +1,11 @@
 #!/bin/bash
-# Poller + guard check: singleton, orphan exit, self-reload, STILL-PENDING,
+# Poller + guard check: singleton, channel guard, orphan exit, self-reload, STILL-PENDING,
 # stop-poll lock probe. Stub curl, no network. Run: bash test/mention-monitor-singleton.sh
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 T=$(mktemp -d); trap 'pkill -f "$T/" 2>/dev/null; rm -rf "$T"' EXIT
 mkdir -p "$T/hooks" "$T/bin"
-cp "$REPO/install/sidechat-mention-monitor.sh" "$T/"; cp "$REPO/install/hooks/stop-poll.sh" "$REPO/install/hooks/sessionstart-autoarm-monitor.sh" "$T/hooks/"
+cp "$REPO/install/sidechat-mention-monitor.sh" "$REPO/install/channel-active.sh" "$T/"; cp "$REPO/install/hooks/stop-poll.sh" "$REPO/install/hooks/sessionstart-autoarm-monitor.sh" "$T/hooks/"
 printf 'TOKEN=t\nSERVER_URL=http://stub\n' > "$T/config"; echo 1.0.0 > "$T/sc-version.txt"
 printf '#!/bin/bash\ncat >/dev/null\n' > "$T/download-attachments.sh"; chmod +x "$T/download-attachments.sh"
 cat > "$T/bin/curl" <<'STUB'
@@ -91,6 +91,11 @@ echo '{"count":1,"server_now":"2026-10-04T17:00:00.000Z","messages":[{"id":5,"se
 out=$(SIDECHAT_MONITOR_EXIT_ON_MENTION=1 timeout 4 bash "$T/sidechat-mention-monitor.sh"); rc=$?
 [[ $rc == 124 ]] || fail "STILL-PENDING alone ended the run (rc $rc)"
 grep -q '^STILL-PENDING 5' <<<"$out" || fail "STILL-PENDING not printed in exit mode"
+
+# channel guard: a poller armed inside a channel session exits at once
+printf '#!/bin/bash\nbash %s\n' "$T/sidechat-mention-monitor.sh" > "$T/stubowner"
+out=$(timeout 5 "$T/stubowner" --dangerously-load-development-channels server:sidechat); rc=$?
+[[ $rc == 0 && "$out" == CHANNEL-ACTIVE* ]] || fail "poller ran in a channel session (rc $rc): $out"
 
 # auto-arm hook picks the arm call from WAKE_PATH
 for cfg in "WAKE_PATH=background:run_in_background" "WAKE_PATH=monitor:timeout_ms" "X=1:timeout_ms"; do
