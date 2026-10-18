@@ -50,8 +50,13 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # test/mcp-version.sh diffs mcp/ against the pinned release tag
 
       - uses: oven-sh/setup-bun@v2
+
+      - name: MCP version moves only with MCP code
+        run: bash test/mcp-version.sh
 
       - name: Read version
         run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
