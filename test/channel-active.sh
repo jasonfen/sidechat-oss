@@ -16,6 +16,6 @@ yes --channels plugin:sidechat@mk
 no --continue -- "prompt about server:sidechat"
 no --dangerously-load-development-channels server:sidechat-uat
 no --dangerously-load-development-channels server:other
-# no claude ancestor (or one without the flag)
-! bash "$REPO/install/channel-active.sh" || fail "active outside a channel session"
+# no claude ancestor (named so the real session running this test is not found)
+! SIDECHAT_OWNER_COMM=no-such-owner bash "$REPO/install/channel-active.sh" || fail "active outside a channel session"
 echo "ok: channel-active"

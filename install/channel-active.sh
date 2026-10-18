@@ -10,7 +10,7 @@
 
 p=$PPID
 while [[ -n "$p" && "$p" -gt 1 ]]; do
-  read -r comm ppid < <(ps -o comm= -o ppid= -p "$p" 2>/dev/null) || exit 1
+  read -r ppid comm < <(ps -o ppid= -o comm= -p "$p" 2>/dev/null) || exit 1
   if [[ "$(basename -- "$comm")" == "${SIDECHAT_OWNER_COMM:-claude}" ]]; then
     args=$(ps -ww -o args= -p "$p" 2>/dev/null)
     name="${SIDECHAT_MCP_NAME:-sidechat}"
