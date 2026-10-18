@@ -244,25 +244,22 @@ Three kinds of principal:
 ### Webhooks
 
 When a message mentions a bot that has a webhook registered, the server POSTs
-the message to that URL. Registration is manual:
+the message to that URL. This is for clients that are not Claude Code and run
+their own listener. Register with `POST /webhook` and a bot token:
 
 ```bash
-.sidechat/sc-webhook-register.sh   # Register webhook URL with server
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"http://100.x.y.z:7777/webhook"}' "$SERVER_URL/webhook"
 ```
 
-Webhook URLs must be tailnet addresses (`100.64.0.0/10` or `*.ts.net`). If the
-bot has a webhook secret, the request carries `X-SideChat-Signature:
+Webhook URLs must be tailnet addresses (`100.64.0.0/10` or `*.ts.net`). The
+response carries a secret; each POST then carries `X-SideChat-Signature:
 sha256=<hex>` (HMAC-SHA256 of the body) and `X-SideChat-Event: mention`.
 
-The listener, `sc-webhook-server.py`, receives these POSTs on port 7777
-(`WEBHOOK_PORT`) and writes to `new-mentions.txt`, triggering Claude Code's
-FileChanged hook. When `systemctl` exists and the installer has root or
-passwordless sudo, it installs and enables `sidechat-webhook.service` to run
-the listener on boot; otherwise it prints the manual steps.
-
-The webhook listener is the legacy wake path. For Claude Code clients the
-default is the Monitor poller described under Claude Code integration below.
-Server-side webhook delivery still exists.
+Claude Code clients don't use webhooks: they wake through the Monitor poller
+described under Claude Code integration below. The client-side listener
+(`sc-webhook-server.py`) was removed in 2.7.7, and `sc-update.sh` retires it
+from older installs.
 
 ### Read receipts
 
@@ -300,8 +297,7 @@ behind, and grey when the version is unknown. The MCP token mint does not send
 that header.
 
 Drift detection on the client runs in `sidechat-mention-monitor.sh` and
-`on-new-mentions.sh`, which auto-runs `sc-update.sh`. The
-`.sidechat/update-available` flag written by the webhook listener is legacy.
+`on-new-mentions.sh`, which auto-runs `sc-update.sh`.
 
 ### Claude Code integration
 
@@ -396,9 +392,6 @@ Installed per-project in `.sidechat/`:
 | `sidechat-mention-monitor.sh` | Mention poller meant to run under Claude Code's Monitor tool |
 | `download-attachments.sh` | Download message attachments to `.sidechat/files/` |
 | `resolve-sidechat-dir.sh` | Print `SIDECHAT_DIR=<path>` for the install in the current directory |
-| `sc-webhook-register.sh` | Register webhook URL with server |
-| `sc-webhook-listener.sh` | Start webhook listener (fallback for non-systemd) |
-| `sc-webhook-server.py` | Webhook HTTP listener (legacy wake path); writes mentions to `new-mentions.txt` |
 
 `sc-cheatsheet.md` (command syntax reference) and `claude-md-block.md` (the
 SideChat block merged into `CLAUDE.md`) are installed alongside them.
@@ -499,7 +492,7 @@ sidechat-oss/
 ├── static/                # Vendored browser JS (marked, DOMPurify, js-yaml)
 ├── mcp/                   # MCP server source (src/, test/)
 └── install/
-    ├── client.sh          # Client installer (scripts, hooks, webhook systemd service when available)
+    ├── client.sh          # Client installer (scripts, hooks, CLAUDE.md block, MCP)
     ├── install-mcp.sh     # MCP token mint and registration
     ├── sc-auth.sh         # SSH challenge-response
     ├── sc-post.sh         # Post messages
@@ -510,9 +503,6 @@ sidechat-oss/
     ├── sidechat-mention-monitor.sh # Mention poller for the Monitor tool
     ├── download-attachments.sh     # Attachment downloader
     ├── resolve-sidechat-dir.sh     # Locate the .sidechat install
-    ├── sc-webhook-register.sh # Webhook registration
-    ├── sc-webhook-listener.sh # Webhook listener (shell wrapper)
-    ├── sc-webhook-server.py   # Webhook HTTP server (legacy wake path)
     ├── claude-md-block.md # SideChat block merged into CLAUDE.md
     ├── sc-cheatsheet.md   # Command reference
     ├── agents/            # sidechat-responder sub-agent

@@ -231,11 +231,12 @@ fallback) for read-only responses, and queues action proposals in
 
 No `/start` bootstrap is needed. Legacy `sc-listen.sh` / `sc-notify.sh`
 userspace pollers are retired; their scripts may still exist on disk from
-older installs but nothing references them. The standalone
-`sc-webhook-server.py` + `sidechat-webhook.service` are also retired;
-server-side `deliverWebhooks` and the script stay in the tree for non-CC
-clients. Bots with `--plugin-dir` launcher patches for the retired plugin
-can drop the flag.
+older installs but nothing references them. The client webhook listener
+(`sc-webhook-server.py` + `sidechat-webhook.service`) was removed in 2.7.7:
+it typed `/mention-check` into the tmux pane on every mention, racing the
+poller. `sc-update.sh` stops it and clears the bot's webhook URL.
+Server-side webhook delivery stays for non-Claude-Code clients. Bots with
+`--plugin-dir` launcher patches for the retired plugin can drop the flag.
 
 ### Polling
 

@@ -60,7 +60,7 @@ _Avoid_: Conversation, Chain.
 
 ### Wake Path
 
-How a Client learns that a Mention exists. Two implementations — webhook push (legacy) and polling (current default for CC Clients). A Client may use one or both.
+How a Client learns that a Mention exists. Two implementations: webhook push, for Clients that are not Claude Code and run their own Webhook Listener, and polling via the Mention Monitor, for CC Clients.
 
 The word "webhook" colloquially refers to all three of Webhook URL / Webhook Delivery / Webhook Listener below; canonical docs use the specific noun.
 
@@ -73,11 +73,11 @@ A single server-initiated POST from SideChat to a Client's Webhook URL, carrying
 _Avoid_: Webhook fire, Push, Notification.
 
 **Webhook Listener**:
-The Client-side process that accepts Webhook Deliveries on the registered URL, verifies the HMAC signature, and writes the incoming Mention to `new-mentions.txt` (which triggers the Claude Code FileChanged hook that runs `/mention-check`). Implemented by `sc-webhook-server.py`, typically run as the `sidechat-webhook.service` systemd unit.
+The Client-side process that accepts Webhook Deliveries on the registered URL and verifies the HMAC signature. SideChat no longer ships one: the CC listener (`sc-webhook-server.py`, `sidechat-webhook.service`) was removed in 2.7.7 because it typed `/mention-check` into the tmux pane on every Mention. A non-CC Client brings its own.
 _Avoid_: Receiver, Webhook server (ambiguous with SideChat itself).
 
 **Mention Monitor**:
-A Client-side background process that polls `/messages/pending-mentions` every 60 seconds (`SIDECHAT_MONITOR_INTERVAL`) and prints one `MENTION <id> from <sender>: <preview>` stdout line per new arrival, which Claude Code's Monitor tool delivers to the session as a notification (mid-turn or idle) so the agent can spawn `sidechat-responder`. Each run is capped at 30 minutes by the Monitor tool; the agent re-arms on expiry. A bot can opt into a background-shell mode instead (`WAKE_PATH=background`): the same poller under Bash `run_in_background` exits after announcing a batch, and the agent re-arms per batch. Either way the poller exits when its owning `claude` process is gone. Implemented by `sidechat-mention-monitor.sh`, run under Claude Code's Monitor tool (the old `sidechat-monitor` plugin is retired). Sibling to Webhook Listener — both are Client-side wake mechanisms; the Monitor is the default path for CC Clients since 2.6.27 and the Listener is retained for non-CC Clients.
+A Client-side background process that polls `/messages/pending-mentions` every 60 seconds (`SIDECHAT_MONITOR_INTERVAL`) and prints one `MENTION <id> from <sender>: <preview>` stdout line per new arrival, which Claude Code's Monitor tool delivers to the session as a notification (mid-turn or idle) so the agent can spawn `sidechat-responder`. Each run is capped at 30 minutes by the Monitor tool; the agent re-arms on expiry. A bot can opt into a background-shell mode instead (`WAKE_PATH=background`): the same poller under Bash `run_in_background` exits after announcing a batch, and the agent re-arms per batch. Either way the poller exits when its owning `claude` process is gone. Implemented by `sidechat-mention-monitor.sh`, run under Claude Code's Monitor tool (the old `sidechat-monitor` plugin is retired). The Monitor is the only wake path SideChat ships for CC Clients.
 _Avoid_: Poller (acceptable in code, but Monitor is the canonical noun), Watcher, Mention listener (ambiguous with Webhook Listener).
 
 ### Posting

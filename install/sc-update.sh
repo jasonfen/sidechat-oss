@@ -7,9 +7,8 @@
 #  - If sc-update.sh itself changes during a run, re-execs the new copy once
 #    with --no-self-update so subsequent script-list additions take effect on
 #    the same invocation.
-#  - Always restarts the webhook listener at the end so a new
-#    sc-webhook-server.py takes effect (the long-lived python process doesn't
-#    pick up disk changes on its own).
+#  - Retires the client webhook listener (2.7.7) wherever an older install
+#    left it running.
 #  - Records the server's current build SHA in sc-version.txt for future
 #    auth-token requests (see sc-auth.sh) and update-available checks.
 
@@ -56,7 +55,7 @@ export MONITOR_HASH_BEFORE
 
 # Update scripts
 echo "Updating scripts..."
-for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-webhook-listener.sh sc-webhook-register.sh sc-webhook-server.py sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh download-attachments.sh launch-claude.sh; do
+for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-update.sh sc-receipt.sh install-mcp.sh resolve-sidechat-dir.sh sidechat-mention-monitor.sh download-attachments.sh launch-claude.sh; do
   if curl -fsSL "$SERVER_URL/install/$script" -o "$SCRIPT_DIR/$script.new" 2>/dev/null; then
     mv "$SCRIPT_DIR/$script.new" "$SCRIPT_DIR/$script"
     chmod +x "$SCRIPT_DIR/$script"
@@ -289,26 +288,35 @@ if [[ -n "$MONITOR_HASH_BEFORE" && -f "$SCRIPT_DIR/sidechat-mention-monitor.sh" 
   fi
 fi
 
-# Re-auth + restart in one step if we already have a token. sc-auth.sh handles
-# the listener restart itself (so the new code AND new token take effect on a
-# single bounce). For never-authed clients, restart the listener directly so
-# they don't lose the new sc-webhook-server.py code.
-if [[ -n "${TOKEN:-}" ]] && [[ -x "$SCRIPT_DIR/sc-auth.sh" ]]; then
-  echo "Re-authenticating to publish version + restart listener..."
-  "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1 && echo "  done" || echo "  sc-auth failed (run manually)"
-else
-  # Systemd first — pgrep matches the systemd process too, so user-fork
-  # would race against the systemd auto-restart for :7777.
-  if systemctl is-active sidechat-webhook.service &>/dev/null; then
-    echo "Restarting sidechat-webhook.service..."
-    sudo systemctl restart sidechat-webhook.service 2>/dev/null || true
-  elif pgrep -f sc-webhook-server.py >/dev/null 2>&1; then
-    echo "Restarting webhook listener..."
-    pkill -f sc-webhook-server.py 2>/dev/null || true
-    sleep 1
-    rm -f "$SCRIPT_DIR/.webhook-listener.pid"
-    "$SCRIPT_DIR/sc-webhook-listener.sh" >/dev/null 2>&1 || true
+# Retire the client webhook listener (2.7.7). It typed `/mention-check` into the
+# tmux pane on every mention, racing the Monitor poller for the same mention.
+# Stop it, remove its unit and files, and clear this bot's webhook URL so the
+# server stops posting to a dead port. Server-side webhook delivery stays for
+# non-Claude-Code clients. Silent no-op once nothing is left.
+WEBHOOK_SERVICE="/etc/systemd/system/sidechat-webhook.service"
+if [[ -f "$WEBHOOK_SERVICE" ]]; then
+  if [[ "$(id -u)" == "0" ]] || sudo -n true 2>/dev/null; then
+    sudo systemctl disable --now sidechat-webhook.service 2>/dev/null || true
+    sudo rm -f "$WEBHOOK_SERVICE"
+    sudo systemctl daemon-reload 2>/dev/null || true
+    echo "  Retired sidechat-webhook.service."
+  else
+    echo "  ⚠ sidechat-webhook.service is retired but removing it needs sudo. Run:"
+    echo "    sudo systemctl disable --now sidechat-webhook.service && sudo rm $WEBHOOK_SERVICE && sudo systemctl daemon-reload"
   fi
+fi
+pkill -f "$SCRIPT_DIR/sc-webhook-server.py" 2>/dev/null || true
+if [[ -f "$SCRIPT_DIR/sc-webhook-server.py" && -n "${TOKEN:-}" ]]; then
+  curl -fsS --max-time 5 -X DELETE -H "Authorization: Bearer $TOKEN" "$SERVER_URL/webhook" >/dev/null 2>&1 \
+    && echo "  Cleared this bot's webhook registration."
+fi
+rm -f "$SCRIPT_DIR/sc-webhook-server.py" "$SCRIPT_DIR/sc-webhook-listener.sh" "$SCRIPT_DIR/sc-webhook-register.sh" \
+  "$SCRIPT_DIR/.webhook-listener.pid" "$SCRIPT_DIR/crons.md"
+
+# Re-auth to publish the new client version to the server.
+if [[ -n "${TOKEN:-}" ]] && [[ -x "$SCRIPT_DIR/sc-auth.sh" ]]; then
+  echo "Re-authenticating to publish version..."
+  "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1 && echo "  done" || echo "  sc-auth failed (run manually)"
 fi
 
 echo ""
