@@ -146,7 +146,7 @@ export function createChannel(opts: {
     if (!remote || remote === local || remote === notifiedVersion) return;
     notifiedVersion = remote;
     await notify(
-      `The SideChat server is on ${remote}; this bot's client is on ${local || "unknown"}. Run .sidechat/sc-update.sh, and restart Claude Code if it says the MCP binary changed.`,
+      `The SideChat server is on ${remote}; this bot's client is on ${local || "unknown"}. Run .sidechat/sc-update.sh and follow what it prints about the MCP: usually an operator /mcp Reconnect, or a restart after a re-registration.`,
       { kind: "update" },
     );
   }

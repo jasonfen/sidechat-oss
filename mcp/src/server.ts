@@ -30,7 +30,7 @@ import { CHANNEL_INSTRUCTIONS, channelEnabled, createChannel, parentCmdline, run
 // MCP via install-mcp.sh; intra-release commits may move the file without
 // drifting this const. Bump at release time, in lockstep with the server's
 // MCP_EXPECTED_CLIENT_BUILD_SHA.
-const CLIENT_BUILD_SHA = "2.8.2";
+const CLIENT_BUILD_SHA = "2.8.3";
 
 const SIDECHAT_URL = (process.env.SIDECHAT_URL ?? "").replace(/\/+$/, "");
 const SIDECHAT_TOKEN = process.env.SIDECHAT_TOKEN ?? "";
@@ -88,7 +88,7 @@ async function scJson<T = unknown>(path: string, init: RequestInit = {}): Promis
       throw new Error(
         JSON.stringify({
           error: "tool_gone_or_endpoint_moved",
-          hint: "Your MCP client may be out of date. Run install-mcp.sh and restart your Claude Code session.",
+          hint: "Your MCP client may be out of date. Run .sidechat/sc-update.sh and follow what it prints (an /mcp Reconnect, or a restart).",
           path,
           method: init.method ?? "GET",
           your_build: CLIENT_BUILD_SHA,
@@ -244,7 +244,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             drift,
             server_now: v.server_now,
             hint: drift
-              ? "client_build_sha != expected — run install-mcp.sh and restart the Claude Code session."
+              ? "client_build_sha != expected — run .sidechat/sc-update.sh and follow what it prints (an /mcp Reconnect, or a restart)."
               : "in sync",
           }),
         },
@@ -294,7 +294,7 @@ async function probeAndLogDrift() {
     process.stderr.write(
       `[sidechat-mcp] server=${v.server_version} schema_rev=${v.schema_rev} ` +
       `client=${CLIENT_BUILD_SHA} expected=${v.expected_client_build_sha}` +
-      (drift ? " — DRIFT: run install-mcp.sh and restart the session.\n" : " — in sync\n")
+      (drift ? " — DRIFT: run .sidechat/sc-update.sh and follow what it prints (an /mcp Reconnect, or a restart).\n" : " — in sync\n")
     );
   } catch (err) {
     process.stderr.write(`[sidechat-mcp] version probe failed (non-fatal): ${err}\n`);
