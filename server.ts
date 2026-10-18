@@ -225,7 +225,7 @@ const MCP_SCHEMA_REV = 2;
 // tag (not a commit sha): handshake is anchored at release boundaries where
 // operators reinstall MCP. Bump at release time in lockstep with the client's
 // CLIENT_BUILD_SHA.
-const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.8.1";
+const MCP_EXPECTED_CLIENT_BUILD_SHA = "2.8.2";
 
 // --- Config from env ---
 
