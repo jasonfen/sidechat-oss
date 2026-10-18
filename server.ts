@@ -4636,7 +4636,8 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
             h.last_inject_ms,
             h.queue_size,
             h.plugin_version,
-            h.updated_at
+            h.updated_at,
+            c.last_known_version AS client_version
      FROM clients c
      LEFT JOIN bot_heartbeats h ON h.username = c.name
      WHERE c.status = 'active'
@@ -4645,13 +4646,13 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
     username: string; client_status: string;
     last_poll_ms: number | null; last_inject_ms: number | null;
     queue_size: number | null; plugin_version: string | null;
-    updated_at: string | null;
+    updated_at: string | null; client_version: string | null;
   }>;
   const nowMs = Date.now();
   // A bot's only SSE connection is its MCP channel (2.8.0), so an open stream
   // means pushes reach its session.
   const bots = rows.map(r => ({ ...r, channel: (sseConnectionsPerSender.get(r.username) ?? 0) > 0 }));
-  const payload = JSON.stringify({ now_ms: nowMs, bots });
+  const payload = JSON.stringify({ now_ms: nowMs, bots, client_latest: SERVER_VERSION, mcp_latest: MCP_EXPECTED_CLIENT_BUILD_SHA });
   return c.html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4700,14 +4701,15 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
         <th>Last inject</th>
         <th>Queue</th>
         <th>Channel</th>
-        <th>Plugin</th>
+        <th>Version</th>
       </tr>
     </thead>
     <tbody id="rows"><!-- filled by JS so timestamps re-render every second --></tbody>
   </table>
   <p class="footnote">Last poll &lt; 30 s = healthy (green); &lt; 5 min = warn; &gt; 5 min or no heartbeat at all = stale (red).
   "Last inject" is null on non-tmux installs &mdash; stdout-wake is the load-bearing path there.
-  "Channel" is live while the bot's MCP holds its event stream open, so mentions are pushed into its session; "off" means it relies on the poller.</p>
+  "Channel" is live while the bot's MCP holds its event stream open, so mentions are pushed into its session; "off" means it relies on the poller.
+  "Version" is green when the client scripts match the server's release and, for a live channel, the running MCP matches the one the server pins; red means the bot needs <code>sc-update.sh</code> or a restart.</p>
 </div>
 <script nonce="${c.get("cspNonce")}">
   const DATA = ${payload};
@@ -4725,6 +4727,17 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
     if (s > 300) cls = 'bad';
     else if (s > 30) cls = 'warn';
     return { text, cls };
+  }
+  // Green only when everything this bot runs is current. The running MCP's
+  // version is known only from a live channel's heartbeat ("mcp-channel vX").
+  const esc = (v) => String(v).replace(/[&<>"']/g, (ch) => '&#' + ch.charCodeAt(0) + ';');
+  function versionCell(b) {
+    const m = b.channel && /^mcp-channel v(.+)$/.exec(b.plugin_version || '');
+    const mcp = m ? m[1] : null;
+    const ok = b.client_version === DATA.client_latest && (mcp == null || mcp === DATA.mcp_latest);
+    const text = 'client ' + (b.client_version || '?') + (mcp ? ' · mcp ' + mcp : '');
+    const tip = 'latest: client ' + DATA.client_latest + ', mcp ' + DATA.mcp_latest + (b.plugin_version ? '; heartbeat: ' + b.plugin_version : '');
+    return '<td class="' + (ok ? 'ok' : 'bad') + '" title="' + esc(tip) + '">' + esc(text) + '</td>';
   }
   function render() {
     const nowMs = Date.now();
@@ -4748,7 +4761,7 @@ app.get("/admin/bot-health", requireObserverAny, (c) => {
         '<td class="' + inj.cls + '">' + inj.text + '</td>' +
         '<td class="' + qCls + '">' + q + '</td>' +
         '<td>' + (b.channel ? '<span class="badge ok">live</span>' : '<span class="mute">off</span>') + '</td>' +
-        '<td class="mute">' + (b.plugin_version || '—') + '</td>' +
+        versionCell(b) +
       '</tr>';
     });
     TBODY.innerHTML = rows.join('') || '<tr><td colspan="7" class="mute">No active bots.</td></tr>';
