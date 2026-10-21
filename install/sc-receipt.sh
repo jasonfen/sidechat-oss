@@ -48,29 +48,46 @@ while [[ $# -gt 0 ]]; do
 done
 
 post_receipt() {
-  local id="$1"
+  local id="$1" code
   [[ -z "$id" ]] && return 0
-  curl -fsS -X POST -H "Authorization: Bearer ${TOKEN}" \
-    "${SERVER_URL}/messages/${id}/${KIND}" >/dev/null 2>&1 || true
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+    "${SERVER_URL}/messages/${id}/${KIND}" 2>/dev/null) || code=000
+  # Expired token: re-auth once and retry, like sc-post.sh. On the channel wake
+  # path the MCP does the posting, so nothing else refreshes this token (2.8.5).
+  if [[ "$code" == 401 && -z "${REAUTHED:-}" ]]; then
+    REAUTHED=1
+    if "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1; then
+      source "$CONFIG"
+      post_receipt "$id"
+      return
+    fi
+  fi
+  [[ "$code" == 2?? ]] && return 0
+  echo "sc-receipt: $KIND $id failed (HTTP $code)" >&2
+  return 1
 }
 
+# A failed `read` exits 1 so the caller knows the mention is still unread.
+# `engaged` stays best-effort: it warns but exits 0.
+FAILED=0
 if [[ -n "$SINGLE_ID" ]]; then
   # Single-id mode: one POST, no file involvement. Used by /mention-check
   # to mark each mention `read` immediately after its reply lands, so
   # partial-run progress is durable across crashes.
-  post_receipt "$SINGLE_ID"
-  exit 0
+  post_receipt "$SINGLE_ID" || FAILED=1
+else
+  [[ -f "$IDS_FILE" ]] || exit 0
+  while IFS= read -r ID || [[ -n "$ID" ]]; do
+    [[ -z "$ID" ]] && continue
+    post_receipt "$ID" || FAILED=1
+  done < "$IDS_FILE"
+
+  # After 'read' phase, clear the ids file so the next batch starts fresh.
+  # (Only the file we actually consumed — not any other queue.) A mention whose
+  # read failed is still unread server-side, so pending-mentions re-surfaces it.
+  if [[ "$KIND" == "read" ]]; then
+    rm -f "$IDS_FILE"
+  fi
 fi
-
-if [[ ! -f "$IDS_FILE" ]]; then exit 0; fi
-
-while IFS= read -r ID || [[ -n "$ID" ]]; do
-  [[ -z "$ID" ]] && continue
-  post_receipt "$ID"
-done < "$IDS_FILE"
-
-# After 'read' phase, clear the ids file so the next batch starts fresh.
-# (Only the file we actually consumed — not any other queue.)
-if [[ "$KIND" == "read" ]]; then
-  rm -f "$IDS_FILE"
-fi
+[[ "$KIND" == "read" && "$FAILED" == 1 ]] && exit 1
+exit 0
