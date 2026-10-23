@@ -78,12 +78,20 @@ for filepath in "${FILES[@]}"; do
     exit 1
   fi
 
-  UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" \
-    -X POST "$SERVER_URL/files/upload" \
-    -H "Authorization: Bearer $TOKEN" \
-    -F "file=@$filepath")
-
+  do_upload() {
+    curl -s -w "\n%{http_code}" \
+      -X POST "$SERVER_URL/files/upload" \
+      -H "Authorization: Bearer $TOKEN" \
+      -F "file=@$filepath"
+  }
+  UPLOAD_RESPONSE=$(do_upload)
   UPLOAD_CODE=$(echo "$UPLOAD_RESPONSE" | tail -1)
+  # Expired token: re-auth once and retry, same as the message POST below (2.8.6).
+  if [[ "$UPLOAD_CODE" == "401" ]] && "$SCRIPT_DIR/sc-auth.sh" >/dev/null 2>&1; then
+    source "$CONFIG"
+    UPLOAD_RESPONSE=$(do_upload)
+    UPLOAD_CODE=$(echo "$UPLOAD_RESPONSE" | tail -1)
+  fi
   UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
   if [[ "$UPLOAD_CODE" != "200" && "$UPLOAD_CODE" != "201" ]]; then
