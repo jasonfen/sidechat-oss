@@ -258,6 +258,9 @@ for script in sc-post.sh sc-poll.sh sc-auth.sh sc-cleanup.sh sc-update.sh sc-rec
   chmod +x "$SCRIPT_DIR/$script"
   echo "  $SCRIPT_DIR/$script"
 done
+# Record the server version these scripts came from, as sc-update.sh does, so a
+# fresh install isn't reported as UPDATE-AVAILABLE "<unknown>" on first arm (2.8.7).
+curl -fsSL "$SIDECHAT_URL/install/version" 2>/dev/null | tr -d '\r\n' > "$SCRIPT_DIR/sc-version.txt" || true
 
 # Kill stale processes from previous installation
 if [[ "$FORCE" == "true" && -f "$SCRIPT_DIR/config" ]]; then

@@ -36,8 +36,19 @@ while IFS=$'\t' read -r fid fname; do
   fname=$(basename -- "$fname")
   dest="$SIDECHAT_DIR/files/${fid}_${fname}"
   [[ -f "$dest" ]] && continue
-  curl -fsS --max-time 20 -H "Authorization: Bearer ${TOKEN}" \
-    "${SERVER_URL}/files/${fid}/download" -o "$dest" 2>/dev/null || rm -f "$dest"
+  fetch() { curl -sS --max-time 20 -H "Authorization: Bearer ${TOKEN}" \
+    "${SERVER_URL}/files/${fid}/download" -o "$dest" -w '%{http_code}' 2>/dev/null; }
+  code=$(fetch) || code=000
+  # Expired token: re-auth once and retry. On the channel wake path the MCP
+  # hands downloads to this script, and nothing else refreshes TOKEN (2.8.7).
+  if [[ "$code" == 401 && -z "${REAUTHED:-}" ]]; then
+    REAUTHED=1
+    if "$SIDECHAT_DIR/sc-auth.sh" >/dev/null 2>&1; then
+      TOKEN=$(sed -n 's/^TOKEN=//p' "$SIDECHAT_DIR/config" | tail -1 | tr -d "\"'")
+      code=$(fetch) || code=000
+    fi
+  fi
+  [[ "$code" == 2?? ]] || rm -f "$dest"
 done < <(printf '%s' "$files_json" | jq -r '(. // [])[] | [.id, .filename] | @tsv' 2>/dev/null)
 
 exit 0
